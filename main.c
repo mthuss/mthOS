@@ -70,6 +70,11 @@ typedef struct bcp
 	struct bcp* next;
 } BCP;
 
+long sc_free(int nFrames, long* freed_addresses) //second chance free: returns address of the freed memory frame
+{
+
+}
+
 int pageFault(Process* proc, long virt_addr)
 {
 	long numPages = ceil(proc->seg_size/PAGE_SIZE);
@@ -89,10 +94,17 @@ int memLoadReq(Process* proc, long address)
 	if(!pageFault(proc,address)) //page already in memory, do nothing
 		return 1;
 
+
 	long size = proc->seg_size;
+
+	int nFrames; //number of frames the data will be divided into
+	nFrames = ceil(size / PAGE_SIZE);
 	if(size > available_memory) //can't load page into main memory: memory full
 	{
-		//implement second chance algorithm here
+		long *freed_addresses;
+		sc_free(nFrames, freed_addresses);
+
+		return 1;
 	}
 
 
@@ -102,8 +114,6 @@ int memLoadReq(Process* proc, long address)
 
 	int i;	
 
-	int nFrames; //number of frames the data will be divided into
-	nFrames = ceil(size / PAGE_SIZE);
 	memPage* newPage = NULL;
 	int pageNum = 0;
 	long pos = 0;
@@ -165,12 +175,33 @@ BCP* initializeBCPregister(int time)
 	return new;
 }
 
-Process* processCreate(char* name, int PID, int priority, int seg_size, char* used_semaphores, char* code, pageTable_t* pTable)
+
+void initializeMemory(Process* proc)
+{
+
+	long size = proc->seg_size;
+
+	int nFrames; //number of frames the data will be divided into
+	nFrames = ceil(size / PAGE_SIZE);
+
+	if(size > available_memory) //can't load page into main memory: memory full
+	{
+		long* freed_addresses;
+		sc_free(nFrames,freed_addresses);
+	}
+
+}
+
+//here, assume these attributes are being retrieved from a file
+Process* processCreate(char* name, int PID, int priority, int seg_size, char* used_semaphores, char* code)
 {
 	Process* newProc = malloc(sizeof(Process));
 
 	//page table will have seg_size/PAGE_SIZE lines
-	newProc->pTable = malloc(ceil((float)seg_size/PAGE_SIZE)*sizeof(pageItem_t)); 
+	newProc->pTable = malloc(sizeof(pageTable_t));
+	newProc->pTable->address = malloc(ceil((float)seg_size/PAGE_SIZE)*sizeof(long)); 
+	initializeMemory(newProc);
+	return newProc;
 }
 void showList(BCP* head)
 {
@@ -198,5 +229,6 @@ int main()
 {
 	BCP* bcpHead = NULL;
 	frameTable_init(&frameTable);
+	Process* p1 = processCreate("proc1",1,1,30,"s t", "there is a light that never goes out, and yet, this text will probably do so");
 	
 }
