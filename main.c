@@ -1,3 +1,9 @@
+/*----------------------------------------------------------------------------------
+  					TO-DO
+ - Account for loading the program itself into memory
+----------------------------------------------------------------------------------*/
+
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
@@ -28,7 +34,7 @@ typedef struct pTableItem
 
 typedef struct memoryPageTable
 {
-	long address; //address[virt] == phys;
+	long* address; //address[virt] == phys;
 } pageTable_t;
 
 typedef struct memoryFrameTable
@@ -83,7 +89,8 @@ int memLoadReq(Process* proc, long address)
 	if(!pageFault(proc,address)) //page already in memory, do nothing
 		return 1;
 
-	if(size > available_memory) //can't load page into main memory; memory full
+	long size = proc->seg_size;
+	if(size > available_memory) //can't load page into main memory: memory full
 	{
 		//implement second chance algorithm here
 	}
@@ -91,7 +98,6 @@ int memLoadReq(Process* proc, long address)
 
 	//actually load page into memory
 	//-------------------------------------------------------------
-	long size = proc->seg_size;
 	char* data = proc->code;
 
 	int i;	
@@ -99,6 +105,7 @@ int memLoadReq(Process* proc, long address)
 	int nFrames; //number of frames the data will be divided into
 	nFrames = ceil(size / PAGE_SIZE);
 	memPage* newPage = NULL;
+	int pageNum = 0;
 	long pos = 0;
 	long remaining_size = size;
 
@@ -118,7 +125,11 @@ int memLoadReq(Process* proc, long address)
 			frameTable.frame[i] = newPage;
 			frameTable.frame[i]->reference_bit = 1;
 
+			//updates page table
+			proc->pTable->address[pageNum] = i;
+
 			//update counter variables
+			pageNum++;
 			remaining_size -= PAGE_SIZE;
 			pos += PAGE_SIZE;
 		}
