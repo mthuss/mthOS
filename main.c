@@ -22,7 +22,7 @@ long available_memory = MAX_MEM_SIZE;
 
 typedef struct memoryPage
 {
-	char data[PAGE_SIZE];
+	//char data[PAGE_SIZE]; //doesn't actually need to store any data
 	short reference_bit;
 } memPage;
 
@@ -75,6 +75,8 @@ long sc_free(int nFrames, long* freed_addresses) //second chance free: returns a
 
 }
 
+//checks if the requested virtual address is already in memory
+//apparently won't be used, since the only memory transaction that will be done is that of loading a process into memory (once).
 int pageFault(Process* proc, long virt_addr)
 {
 	long numPages = ceil(proc->seg_size/PAGE_SIZE);
@@ -89,10 +91,13 @@ int pageFault(Process* proc, long virt_addr)
 }
 
 //int memLoadReq(long size, char* data)
-int memLoadReq(Process* proc, long address)
+//int memLoadReq(Process* proc, long address)
+
+//loads a process into memory and sets its virtual adresses
+int memLoadReq(Process* proc)
 {
-	if(!pageFault(proc,address)) //page already in memory, do nothing
-		return 1;
+//	if(!pageFault(proc,address)) //page already in memory, do nothing
+//		return 1;
 
 
 	long size = proc->seg_size;
@@ -110,38 +115,41 @@ int memLoadReq(Process* proc, long address)
 
 	//actually load page into memory
 	//-------------------------------------------------------------
-	char* data = proc->code;
 
 	int i;	
 
 	memPage* newPage = NULL;
 	int pageNum = 0;
-	long pos = 0;
+//	long pos = 0;
 	long remaining_size = size;
 
-	for(i = 0; i < NUMBER_OF_FRAMES && remaining_size > 0; i++)
+	//for(i = 0; i < NUMBER_OF_FRAMES && remaining_size > 0; i++)
+	for(i = 0; i < NUMBER_OF_FRAMES; i++)
 	{
 		if(frameTable.frame[i] == NULL) //find available frames
 		{
 			//initialize new page to be inserted in the frame
-			newPage = malloc(PAGE_SIZE);
-			memset(newPage,0,PAGE_SIZE);
+//			newPage = malloc(PAGE_SIZE);
+			newPage = malloc(sizeof(memPage));
+			memset(newPage,0,sizeof(memPage));
 
-			//creates a page of data and copies it to the available memory frame
-			if(remaining_size < PAGE_SIZE)
-				memcpy(newPage->data, data+pos, remaining_size);
-			else
-				memcpy(newPage->data, data+pos, PAGE_SIZE);
+//			//creates a page of data and copies it to the available memory frame
+			//(acually useless, as no data will be stored)
+//			if(remaining_size < PAGE_SIZE)
+//				memcpy(newPage->data, data+pos, remaining_size);
+//			else
+//				memcpy(newPage->data, data+pos, PAGE_SIZE);
+
 			frameTable.frame[i] = newPage;
-			frameTable.frame[i]->reference_bit = 1;
+			frameTable.frame[i]->reference_bit = 1; //sets reference bit of newPage to 1
 
 			//updates page table
 			proc->pTable->address[pageNum] = i;
 
 			//update counter variables
 			pageNum++;
-			remaining_size -= PAGE_SIZE;
-			pos += PAGE_SIZE;
+//			remaining_size -= PAGE_SIZE;
+//			pos += PAGE_SIZE;
 		}
 	}
 	available_memory -= size;
