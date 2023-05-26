@@ -7,7 +7,6 @@
 #include <stdlib.h>
 #include <math.h>
 #include <string.h>
-#include "memory.h"
 
 //1GB de memória
 #define MAX_MEM_SIZE 1074000000
@@ -25,7 +24,7 @@ long available_memory = MAX_MEM_SIZE;
 typedef struct memoryPage
 {
 	//char data[PAGE_SIZE]; //doesn't actually need to store any data
-	short reference_bit;
+	char reference_bit;
 } memPage;
 
 typedef struct pTableItem
@@ -79,7 +78,7 @@ BCP_t BCP;
 void init_data_structures()
 {
 	//frameTable
-	for(int i = 0; i < NUMBER_OF_FRAMES;i++)
+	for(int i = 0; i < NUMBER_OF_FRAMES; i++)
 		frameTable.frame[i] = NULL;
 
 	//BCP
@@ -187,6 +186,7 @@ Process* readProgramfromDisk(char* filename)
 	}
 	proc->code[i] = '\0';
 	
+	fclose(file);
 
 	return proc;
 
@@ -231,49 +231,86 @@ Process* memLoadReq(char* file)
 
 	int nFrames; //number of frames the data will be divided into
 	nFrames = ceil((float)size / PAGE_SIZE);
-	if(size > available_memory) //can't load page into main memory: memory full
-	{
-		//calculates how many MORE frames are needed to store all the data
-		long frames_needed = ceil((float)(size - available_memory)/PAGE_SIZE);
-		long *freed_addresses;
-		sc_free(frames_needed, freed_addresses);
-		//should not free nFrames, rather, should free exactly how many frames are missing to store all of the data
-
-		//implement second chance algorithm here
-		return NULL;
-	}
+//	if(size > available_memory) //can't load page into main memory: memory full
+//	{
+//		//calculates how many MORE frames are needed to store all the data
+//		long frames_needed = ceil((float)(size - available_memory)/PAGE_SIZE);
+//		long *freed_addresses;
+//		sc_free(frames_needed, freed_addresses);
+//		//should not free nFrames, rather, should free exactly how many frames are missing to store all of the data
+//
+//		//implement second chance algorithm here
+//		return NULL;
+//	}
 
 
 	//actually load page into memory
 	//-------------------------------------------------------------
 
-	int i;	
+	int i = 0;	
+	int j = 0;
 
 	memPage* newPage = NULL;
 	int pageNum = 0;
 	long remaining_size = size;
 
-	for(i = 0; i < NUMBER_OF_FRAMES && nFrames > 0; i++)
+	while(nFrames > 0)
 	{
-		if(frameTable.frame[i] == NULL) //find available frames
+		printf("rem: %d | avail: %d\n",remaining_size,available_memory);
+		if(available_memory == 0 || size - nFrames*PAGE_SIZE > available_memory) //no memory available for current page
 		{
-			//initialize new page to be inserted in the frame
-			newPage = malloc(sizeof(memPage));
-			memset(newPage,0,sizeof(memPage));
+			printf("not enough memory!\n");
+			//second chance
+			for(j = 0; j <= NUMBER_OF_FRAMES && nFrames > 0; j++)
+			{
+				if(j == NUMBER_OF_FRAMES)
+					j = 0;
+				if(frameTable.frame[j] != NULL)
+				{
 
-			frameTable.frame[i] = newPage;
-			if(frameTable.frame[i] == NULL)
-			frameTable.frame[i]->reference_bit = 1; //sets reference bit of newPage to 1
+					if(frameTable.frame[j]->reference_bit == 1)
+						frameTable.frame[j]->reference_bit = 0;
+					else
+					{
+						//freed memory is instantly replaced, so the available_memory counter is not changed
+						free(frameTable.frame[j]);
+						printf("freed frame %d\n",j);
+						newPage = malloc(sizeof(memPage));
+						memset(newPage,0,sizeof(memPage));
+						frameTable.frame[j] = newPage;
+						frameTable.frame[j]->reference_bit = 1; //sets reference bit of newPage to 1
 
-			//updates page table
-			proc->pTable->address[pageNum] = i;
-
-			//update counter variables
-			pageNum++;
-			nFrames--;
+						//updates page table
+						proc->pTable->address[pageNum] = j;
+						break;
+					}
+				}
+			}
 		}
+		else //memory is available for current page
+		{
+			for(; i < NUMBER_OF_FRAMES && nFrames > 0; i++)
+				if(frameTable.frame[i] == NULL) //find available frames
+				{
+					//initialize new page to be inserted in the frame
+					newPage = malloc(sizeof(memPage));
+					memset(newPage,0,sizeof(memPage));
+
+					frameTable.frame[i] = newPage;
+					frameTable.frame[i]->reference_bit = 1; //sets reference bit of newPage to 1
+
+					//updates page table
+					proc->pTable->address[pageNum] = i;
+					break;
+				}
+			available_memory -= PAGE_SIZE;
+		}
+
+		//update counter variables
+		pageNum++;
+		nFrames--;
+		remaining_size -= PAGE_SIZE;
 	}
-	available_memory -= size;
 
 	return proc;
 }
@@ -335,6 +372,7 @@ void processCreate(char* filename)
 	//create a bcp register of said process
 	//load process into memory
 	BCPitem_t* new = malloc(sizeof(BCPitem_t));
+	new->proc = NULL;
 	new->proc = memLoadReq(filename);
 	if(new->proc == NULL)
 	{
@@ -408,8 +446,7 @@ int main()
 //	readProgramfromDisk("synthetic_2.prog");
 //	printProcessInfo(readProgramfromDisk("synthetic_2.prog"));
 	processCreate("synthetic_2.prog");
-	processCreate("synthetic_1.prog");
+	processCreate("synthetic_2.prog");
 //	showList(BCP.head);
-
 	
 }
