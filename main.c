@@ -17,6 +17,8 @@
 
 #define NUMBER_OF_FRAMES MAX_MEM_SIZE/PAGE_SIZE
 
+#define FILE_EXT ".prog"
+
 long available_memory = MAX_MEM_SIZE;
 
 
@@ -78,6 +80,34 @@ long sc_free(int nFrames, long* freed_addresses) //second chance free: returns a
 
 }
 
+int validateFilename(char* filename)
+{
+	int i;
+	for(i = strlen(filename) - 1; i >= 0; i--)
+	{
+		if(filename[i] == '.')
+			break;
+	}
+	if(strncmp(&filename[i],FILE_EXT,strlen(FILE_EXT)) == 0)
+		return 1;
+
+	return 0;
+}
+
+//make sure to check for NULL returns whenever this function is called
+Process* readProgramfromDisk(char* filename)
+{
+	if(!validateFilename(filename))
+	{
+		printf("Invalid filename!!\nOnly " FILE_EXT " files allowed!\n");
+		return NULL;
+	}
+
+	FILE* file = fopen(filename,"r");
+
+	if(!file)
+		printf("Requested file does not exist!\n");
+}
 //checks if the requested virtual address is already in memory
 //apparently won't be used, since the only memory transaction that will be done is that of loading a process into memory (once).
 int pageFault(Process* proc, long virt_addr)
@@ -243,7 +273,7 @@ void count_used_frames()
 int main()
 {
 	frameTable_init(&frameTable);
-	Process* p1 = processCreate("proc1",1,1,30,"s t", "there is a light that never goes out, and yet, this text will probably do so");
+	Process* p1 = processCreate("proc1",1,1,30,"s t", NULL);
 	memLoadReq(p1);
 	queueTest();
 	count_used_frames();
