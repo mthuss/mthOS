@@ -1,6 +1,5 @@
 /*----------------------------------------------------------------------------------
   					TO-DO
- - Account for loading the program itself into memory
 ----------------------------------------------------------------------------------*/
 
 
@@ -19,6 +18,7 @@
 #define NUMBER_OF_FRAMES MAX_MEM_SIZE/PAGE_SIZE
 
 long available_memory = MAX_MEM_SIZE;
+
 
 typedef struct memoryPage
 {
@@ -43,13 +43,14 @@ typedef struct memoryFrameTable
 	memPage* frame[NUMBER_OF_FRAMES];
 } frameTable_t;
 
+frameTable_t  frameTable;
+
 void frameTable_init(frameTable_t* table)
 {
 	for(int i = 0; i < NUMBER_OF_FRAMES;i++)
 		table->frame[i] = NULL;
 }
 
-frameTable_t  frameTable;
 
 typedef struct proc
 {
@@ -69,6 +70,8 @@ typedef struct bcp
 	int remaining_time;
 	struct bcp* next;
 } BCP;
+
+BCP* bcpHead = NULL;
 
 long sc_free(int nFrames, long* freed_addresses) //second chance free: returns address of the freed memory frame
 {
@@ -90,20 +93,13 @@ int pageFault(Process* proc, long virt_addr)
 	return 0;
 }
 
-//int memLoadReq(long size, char* data)
-//int memLoadReq(Process* proc, long address)
-
 //loads a process into memory and sets its virtual adresses
 int memLoadReq(Process* proc)
 {
-//	if(!pageFault(proc,address)) //page already in memory, do nothing
-//		return 1;
-
-
 	long size = proc->seg_size;
 
 	int nFrames; //number of frames the data will be divided into
-	nFrames = ceil(size / PAGE_SIZE);
+	nFrames = ceil((float)size / PAGE_SIZE);
 	if(size > available_memory) //can't load page into main memory: memory full
 	{
 		long *freed_addresses;
@@ -120,25 +116,15 @@ int memLoadReq(Process* proc)
 
 	memPage* newPage = NULL;
 	int pageNum = 0;
-//	long pos = 0;
 	long remaining_size = size;
 
-	//for(i = 0; i < NUMBER_OF_FRAMES && remaining_size > 0; i++)
-	for(i = 0; i < NUMBER_OF_FRAMES; i++)
+	for(i = 0; i < NUMBER_OF_FRAMES && nFrames > 0; i++)
 	{
 		if(frameTable.frame[i] == NULL) //find available frames
 		{
 			//initialize new page to be inserted in the frame
-//			newPage = malloc(PAGE_SIZE);
 			newPage = malloc(sizeof(memPage));
 			memset(newPage,0,sizeof(memPage));
-
-//			//creates a page of data and copies it to the available memory frame
-			//(acually useless, as no data will be stored)
-//			if(remaining_size < PAGE_SIZE)
-//				memcpy(newPage->data, data+pos, remaining_size);
-//			else
-//				memcpy(newPage->data, data+pos, PAGE_SIZE);
 
 			frameTable.frame[i] = newPage;
 			frameTable.frame[i]->reference_bit = 1; //sets reference bit of newPage to 1
@@ -148,30 +134,36 @@ int memLoadReq(Process* proc)
 
 			//update counter variables
 			pageNum++;
-//			remaining_size -= PAGE_SIZE;
-//			pos += PAGE_SIZE;
+			nFrames--;
 		}
 	}
 	available_memory -= size;
 	
 }
 
-void queueProcess(BCP** head, BCP* proc) //adds proc into the scheduling list
+void startProgram(Process* proc)
 {
-	if(*head == NULL)
+	//load process into memory
+	//create a bcp register of said process
+	//queue the process in the scheduling list	
+}
+
+void queueProcess(BCP* proc) //adds proc into the scheduling list
+{
+	if(bcpHead == NULL)
 	{
-		*head = proc;
+		bcpHead = proc;
 		return;
 	}
 	
 	//ordering by shortest remaining time
 	BCP *aux, *prev = NULL;
-	for(aux = *head; aux != NULL && aux->remaining_time < proc->remaining_time; prev = aux, aux = aux->next);
+	for(aux = bcpHead; aux != NULL && aux->remaining_time < proc->remaining_time; prev = aux, aux = aux->next);
 	proc->next = aux;
 	if(prev)
 		prev->next = proc;
 	else
-		*head = proc;
+		bcpHead = proc;
 }
 
 BCP* initializeBCPregister(int time)
@@ -190,7 +182,7 @@ void initializeMemory(Process* proc)
 	long size = proc->seg_size;
 
 	int nFrames; //number of frames the data will be divided into
-	nFrames = ceil(size / PAGE_SIZE);
+	nFrames = ceil((float)size / PAGE_SIZE);
 
 	if(size > available_memory) //can't load page into main memory: memory full
 	{
@@ -208,7 +200,12 @@ Process* processCreate(char* name, int PID, int priority, int seg_size, char* us
 	//page table will have seg_size/PAGE_SIZE lines
 	newProc->pTable = malloc(sizeof(pageTable_t));
 	newProc->pTable->address = malloc(ceil((float)seg_size/PAGE_SIZE)*sizeof(long)); 
-	initializeMemory(newProc);
+	strncpy(newProc->name,name,strlen(name));
+	newProc->PID = PID;
+	newProc->priority = priority;
+	newProc->seg_size = seg_size * 1024; //convert from kbytes to bytes
+	newProc->used_semaphores = used_semaphores;
+	newProc->code = code;
 	return newProc;
 }
 void showList(BCP* head)
@@ -218,25 +215,37 @@ void showList(BCP* head)
 	printf("\n");
 }
 
-void queueTest(BCP* bcpHead)
+void queueTest()
 {
 	BCP* p1 = initializeBCPregister(30);
 	BCP* p2 = initializeBCPregister(40);
 	BCP* p3 = initializeBCPregister(35);
 	BCP* p4 = initializeBCPregister(45);
 	BCP* p5 = initializeBCPregister(15);
-	queueProcess(&bcpHead, p1);
-	queueProcess(&bcpHead, p2);
-	queueProcess(&bcpHead, p5);
-	queueProcess(&bcpHead, p4);
-	queueProcess(&bcpHead, p3);
+	queueProcess(p1);
+	queueProcess(p2);
+	queueProcess(p3);
+	queueProcess(p4);
+	queueProcess(p5);
 	showList(bcpHead);
+}
+
+void count_used_frames()
+{
+	int count = 0;
+	for(int i = 0; i < NUMBER_OF_FRAMES; i++) 
+		if(frameTable.frame[i])
+			count++;
+	printf("number of frames currently used: %d\n",count);
+
 }
 
 int main()
 {
-	BCP* bcpHead = NULL;
 	frameTable_init(&frameTable);
 	Process* p1 = processCreate("proc1",1,1,30,"s t", "there is a light that never goes out, and yet, this text will probably do so");
+	memLoadReq(p1);
+	queueTest();
+	count_used_frames();
 	
 }
