@@ -88,7 +88,7 @@ int validateFilename(char* filename)
 		if(filename[i] == '.')
 			break;
 	}
-	if(strncmp(&filename[i],FILE_EXT,strlen(FILE_EXT)) == 0)
+	if(strcmp(&filename[i],FILE_EXT) == 0)
 		return 1;
 
 	return 0;
