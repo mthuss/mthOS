@@ -41,12 +41,9 @@ typedef struct memoryPageTable
 
 typedef struct memoryFrameTable
 {
-	//list of pointers to each and every frame stored in memory
+	//list associating each and every frame in memory to the page stored in it
 	memPage* frame[NUMBER_OF_FRAMES];
 } frameTable_t;
-
-frameTable_t  frameTable;
-
 
 typedef struct proc
 {
@@ -71,6 +68,10 @@ typedef struct bcp
 {
 	BCPitem_t* head;
 } BCP_t;
+
+//Global variables:
+//------------------------------------------------------------------------------
+frameTable_t  frameTable;
 BCP_t BCP;
 
 //Functions:
@@ -232,8 +233,11 @@ Process* memLoadReq(char* file)
 	nFrames = ceil((float)size / PAGE_SIZE);
 	if(size > available_memory) //can't load page into main memory: memory full
 	{
+		//calculates how many MORE frames are needed to store all the data
+		long frames_needed = ceil((float)(size - available_memory)/PAGE_SIZE);
 		long *freed_addresses;
-		sc_free(nFrames, freed_addresses);
+		sc_free(frames_needed, freed_addresses);
+		//should not free nFrames, rather, should free exactly how many frames are missing to store all of the data
 
 		//implement second chance algorithm here
 		return NULL;
