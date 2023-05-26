@@ -41,24 +41,18 @@ typedef struct memoryPageTable
 
 typedef struct memoryFrameTable
 {
-	//list of pointers to each and every frane stored in memory
+	//list of pointers to each and every frame stored in memory
 	memPage* frame[NUMBER_OF_FRAMES];
 } frameTable_t;
 
 frameTable_t  frameTable;
 
-void frameTable_init(frameTable_t* table)
-{
-	for(int i = 0; i < NUMBER_OF_FRAMES;i++)
-		table->frame[i] = NULL;
-}
-
 
 typedef struct proc
 {
 	char name[8]; //limited to 8 bytes
-	int PID;
-	int priority;
+	int SID; //Segment ID
+	int priority; //won't actually be used
 	int seg_size; //in kbytes
 	char* used_semaphores; //list of semaphores, separated by spaces
 	char* code;
@@ -66,14 +60,31 @@ typedef struct proc
 	
 } Process;
 
-typedef struct bcp
+typedef struct bcp_item
 {
 	Process* proc;
-	int remaining_time;
-	struct bcp* next;
-} BCP;
+	long remaining_time;
+	struct bcp_item* next;
+} BCPitem_t;
 
-BCP* bcpHead = NULL;
+typedef struct bcp
+{
+	BCPitem_t* head;
+} BCP_t;
+BCP_t BCP;
+
+//Functions:
+//------------------------------------------------------------------------------
+void init_data_structures()
+{
+	//frameTable
+	for(int i = 0; i < NUMBER_OF_FRAMES;i++)
+		frameTable.frame[i] = NULL;
+
+	//BCP
+	BCP.head = NULL;
+}
+
 
 long sc_free(int nFrames, long* freed_addresses) //second chance free: returns address of the freed memory frame
 {
@@ -99,14 +110,97 @@ Process* readProgramfromDisk(char* filename)
 {
 	if(!validateFilename(filename))
 	{
-		printf("Invalid filename!!\nOnly " FILE_EXT " files allowed!\n");
+		printf("Invalid filename!! Only " FILE_EXT " files allowed!\n");
 		return NULL;
 	}
 
 	FILE* file = fopen(filename,"r");
 
 	if(!file)
+	{
 		printf("Requested file does not exist!\n");
+		return NULL;
+	}
+
+
+	//get filesize
+	fseek(file,0L,SEEK_END);
+	long filesize = ftell(file);
+	rewind(file);
+
+	Process* proc = malloc(sizeof(Process));
+
+
+	fscanf(file,"%[^\n]",&proc->name);
+	fscanf(file,"%d\n",&proc->SID);
+	fscanf(file,"%d\n",&proc->priority);
+	fscanf(file,"%d\n",&proc->seg_size);
+	proc->seg_size*=1024;
+
+	//initialize page table
+	proc->pTable = malloc(sizeof(pageTable_t));
+	proc->pTable->address = malloc(ceil((float)proc->seg_size/PAGE_SIZE)*sizeof(long)); 
+
+	int i = 0;
+	char c;	
+	//properly implement this as a list of semaphores, using strtok to remove spaces
+	long sem_start_pos = ftell(file);
+	char prevchar;
+	int num_of_semaphores = 0; //one of the characters read was the semaphore, the other a space
+	while(1) //figure out how many semaphores the process uses (assuming they only use single-letter names
+	{
+		c = fgetc(file);
+		if(c == '\n' || c == EOF)
+			break;
+		if(c != ' ')
+			num_of_semaphores++;
+	}
+
+	proc->used_semaphores = malloc(num_of_semaphores+1); //+1 for a null terminator
+	fseek(file,sem_start_pos,SEEK_SET);
+	i = 0;
+	while(1) //actually retrieve the semaphores
+	{
+		c = fgetc(file);
+		if(c == '\n' || c == EOF)
+			break;
+		if(c != ' ')
+		{
+			proc->used_semaphores[i] = c;
+			i++;
+		}
+	}
+	proc->used_semaphores[num_of_semaphores] = '\0';
+	
+
+	proc->code = malloc(filesize - ftell(file) + 1); //+1 for a null terminator
+	i = 0;
+	while(1) //save the remainder of the file as code
+	{
+		c = fgetc(file);
+		if(c == EOF)
+			break;
+		proc->code[i] = c;
+		i++;
+			
+	}
+	proc->code[i] = '\0';
+	
+
+	return proc;
+
+}
+
+void printProcessInfo(Process* proc)
+{
+	printf("Name: %s\nSegment ID: %d\nPriority: %d\nSegment Size: %d bytes\n",proc->name,proc->SID,proc->priority,proc->seg_size);
+	printf("Used semaphores: ");
+	for(int i = 0; proc->used_semaphores[i] != '\0'; i++)
+		printf("%c ",proc->used_semaphores[i]);
+	printf("\n\n");
+	printf("---------------------------\n");
+	printf("Code:\n%s",proc->code);
+	printf("---------------------------\n");
 }
 //checks if the requested virtual address is already in memory
 //apparently won't be used, since the only memory transaction that will be done is that of loading a process into memory (once).
@@ -124,8 +218,14 @@ int pageFault(Process* proc, long virt_addr)
 }
 
 //loads a process into memory and sets its virtual adresses
-int memLoadReq(Process* proc)
+Process* memLoadReq(char* file)
 {
+	Process* proc = readProgramfromDisk(file);
+	if(!proc)
+	{
+		printf("Error retrieving program from disk\n");
+		return NULL;
+	}
 	long size = proc->seg_size;
 
 	int nFrames; //number of frames the data will be divided into
@@ -135,7 +235,8 @@ int memLoadReq(Process* proc)
 		long *freed_addresses;
 		sc_free(nFrames, freed_addresses);
 
-		return 1;
+		//implement second chance algorithm here
+		return NULL;
 	}
 
 
@@ -157,6 +258,7 @@ int memLoadReq(Process* proc)
 			memset(newPage,0,sizeof(memPage));
 
 			frameTable.frame[i] = newPage;
+			if(frameTable.frame[i] == NULL)
 			frameTable.frame[i]->reference_bit = 1; //sets reference bit of newPage to 1
 
 			//updates page table
@@ -168,43 +270,80 @@ int memLoadReq(Process* proc)
 		}
 	}
 	available_memory -= size;
-	
+
+	return proc;
 }
 
-void startProgram(Process* proc)
+int isDigit(char c)
 {
-	//load process into memory
-	//create a bcp register of said process
-	//queue the process in the scheduling list	
+	if(c >= '0' && c <= '9')
+		return 1;
+	return 0;
 }
 
-void queueProcess(BCP* proc) //adds proc into the scheduling list
+long calculateRemainingTime(Process* proc)
 {
-	if(bcpHead == NULL)
+	char* code = proc->code;
+	long remaining_time = 0;
+
+	int i,j;
+	i = 0;
+	char time[10];
+	while(1)
 	{
-		bcpHead = proc;
+		if(isDigit(code[i]))
+		{
+			for(j = 0; isDigit(code[i]); i++, j++)
+				time[j] = code[i];
+			time[j] = '\0';
+
+			remaining_time += strtol(time,NULL,10); 
+		}
+		if(code[i] == '\0')
+			break;
+		i++;
+
+	}
+
+	return remaining_time;
+}
+
+void queueProcess(BCPitem_t* proc) //adds proc into the scheduling list
+{
+	if(BCP.head == NULL)
+	{
+		BCP.head = proc;
 		return;
 	}
 	
 	//ordering by shortest remaining time
-	BCP *aux, *prev = NULL;
-	for(aux = bcpHead; aux != NULL && aux->remaining_time < proc->remaining_time; prev = aux, aux = aux->next);
+	BCPitem_t *aux, *prev = NULL;
+	for(aux = BCP.head; aux != NULL && aux->remaining_time < proc->remaining_time; prev = aux, aux = aux->next);
 	proc->next = aux;
 	if(prev)
 		prev->next = proc;
 	else
-		bcpHead = proc;
+		BCP.head = proc;
 }
 
-BCP* initializeBCPregister(int time)
+void processCreate(char* filename)
 {
-	BCP* new = malloc(sizeof(BCP));
-	new->proc = NULL;
-	new->remaining_time = time;
-	new->next = NULL;
-	return new;
-}
+	//create a bcp register of said process
+	//load process into memory
+	BCPitem_t* new = malloc(sizeof(BCPitem_t));
+	new->proc = memLoadReq(filename);
+	if(new->proc == NULL)
+	{
+		free(new);
+		return;
+	}
 
+	new->remaining_time = calculateRemainingTime(new->proc);
+
+	//queue the process in the scheduling list	
+	queueProcess(new);
+	printf("started process %s\n\n",new->proc->name);
+}
 
 void initializeMemory(Process* proc)
 {
@@ -222,42 +361,28 @@ void initializeMemory(Process* proc)
 
 }
 
-//here, assume these attributes are being retrieved from a file
-Process* processCreate(char* name, int PID, int priority, int seg_size, char* used_semaphores, char* code)
+////here, assume these attributes are being retrieved from a file
+//Process* processCreate(char* name, int SID, int priority, int seg_size, char* used_semaphores, char* code)
+//{
+//	Process* newProc = malloc(sizeof(Process));
+//
+//	//page table will have seg_size/PAGE_SIZE lines
+//	newProc->pTable = malloc(sizeof(pageTable_t));
+//	newProc->pTable->address = malloc(ceil((float)seg_size/PAGE_SIZE)*sizeof(long)); 
+//	strncpy(newProc->name,name,strlen(name));
+//	newProc->SID = SID;
+//	newProc->priority = priority;
+//	newProc->seg_size = seg_size * 1024; //convert from kbytes to bytes
+//	newProc->used_semaphores = used_semaphores;
+//	newProc->code = code;
+//	return newProc;
+//}
+void showList()
 {
-	Process* newProc = malloc(sizeof(Process));
-
-	//page table will have seg_size/PAGE_SIZE lines
-	newProc->pTable = malloc(sizeof(pageTable_t));
-	newProc->pTable->address = malloc(ceil((float)seg_size/PAGE_SIZE)*sizeof(long)); 
-	strncpy(newProc->name,name,strlen(name));
-	newProc->PID = PID;
-	newProc->priority = priority;
-	newProc->seg_size = seg_size * 1024; //convert from kbytes to bytes
-	newProc->used_semaphores = used_semaphores;
-	newProc->code = code;
-	return newProc;
-}
-void showList(BCP* head)
-{
+	BCPitem_t* head = BCP.head;
 	for(;head;head = head->next)
 		printf("%d ",head->remaining_time);
 	printf("\n");
-}
-
-void queueTest()
-{
-	BCP* p1 = initializeBCPregister(30);
-	BCP* p2 = initializeBCPregister(40);
-	BCP* p3 = initializeBCPregister(35);
-	BCP* p4 = initializeBCPregister(45);
-	BCP* p5 = initializeBCPregister(15);
-	queueProcess(p1);
-	queueProcess(p2);
-	queueProcess(p3);
-	queueProcess(p4);
-	queueProcess(p5);
-	showList(bcpHead);
 }
 
 void count_used_frames()
@@ -272,10 +397,15 @@ void count_used_frames()
 
 int main()
 {
-	frameTable_init(&frameTable);
-	Process* p1 = processCreate("proc1",1,1,30,"s t", NULL);
-	memLoadReq(p1);
-	queueTest();
-	count_used_frames();
+	init_data_structures();
+//	Process* p1 = processCreate("proc1",1,1,30,"s t", NULL);
+//	memLoadReq(p1);
+//	queueTest();
+//	readProgramfromDisk("synthetic_2.prog");
+//	printProcessInfo(readProgramfromDisk("synthetic_2.prog"));
+	processCreate("synthetic_2.prog");
+	processCreate("synthetic_1.prog");
+//	showList(BCP.head);
+
 	
 }
