@@ -59,7 +59,10 @@ typedef struct proc
 typedef struct bcp_item
 {
 	Process* proc;
+	char* next_instruction;
+	char status; //r: ready, R: running, b: blocked 
 	long remaining_time;
+	int PID;
 	struct bcp_item* next;
 } BCPitem_t;
 
@@ -72,6 +75,7 @@ typedef struct bcp
 //------------------------------------------------------------------------------
 frameTable_t  frameTable;
 BCP_t BCP;
+volatile int PID = 0;
 
 //Functions:
 //------------------------------------------------------------------------------
@@ -83,12 +87,6 @@ void init_data_structures()
 
 	//BCP
 	BCP.head = NULL;
-}
-
-
-long sc_free(int nFrames, long* freed_addresses) //second chance free: returns address of the freed memory frame
-{
-
 }
 
 int validateFilename(char* filename)
@@ -231,18 +229,6 @@ Process* memLoadReq(char* file)
 
 	int nFrames; //number of frames the data will be divided into
 	nFrames = ceil((float)size / PAGE_SIZE);
-//	if(size > available_memory) //can't load page into main memory: memory full
-//	{
-//		//calculates how many MORE frames are needed to store all the data
-//		long frames_needed = ceil((float)(size - available_memory)/PAGE_SIZE);
-//		long *freed_addresses;
-//		sc_free(frames_needed, freed_addresses);
-//		//should not free nFrames, rather, should free exactly how many frames are missing to store all of the data
-//
-//		//implement second chance algorithm here
-//		return NULL;
-//	}
-
 
 	//actually load page into memory
 	//-------------------------------------------------------------
@@ -256,10 +242,10 @@ Process* memLoadReq(char* file)
 
 	while(nFrames > 0)
 	{
-		printf("rem: %d | avail: %d\n",remaining_size,available_memory);
+	//	printf("rem: %d | avail: %d\n",remaining_size,available_memory);
 		if(available_memory == 0 || size - nFrames*PAGE_SIZE > available_memory) //no memory available for current page
 		{
-			printf("not enough memory!\n");
+	//		printf("not enough memory!\n");
 			//second chance
 			for(j = 0; j <= NUMBER_OF_FRAMES && nFrames > 0; j++)
 			{
@@ -274,7 +260,7 @@ Process* memLoadReq(char* file)
 					{
 						//freed memory is instantly replaced, so the available_memory counter is not changed
 						free(frameTable.frame[j]);
-						printf("freed frame %d\n",j);
+	//					printf("freed frame %d\n",j);
 						newPage = malloc(sizeof(memPage));
 						memset(newPage,0,sizeof(memPage));
 						frameTable.frame[j] = newPage;
@@ -373,7 +359,12 @@ void processCreate(char* filename)
 	//load process into memory
 	BCPitem_t* new = malloc(sizeof(BCPitem_t));
 	new->proc = NULL;
+	new->next = NULL;
+	new->next_instruction = NULL;
 	new->proc = memLoadReq(filename);
+	new->PID = PID;
+	PID++;
+	new->status = 'r';
 	if(new->proc == NULL)
 	{
 		free(new);
@@ -387,21 +378,21 @@ void processCreate(char* filename)
 	printf("started process %s\n\n",new->proc->name);
 }
 
-void initializeMemory(Process* proc)
-{
-
-	long size = proc->seg_size;
-
-	int nFrames; //number of frames the data will be divided into
-	nFrames = ceil((float)size / PAGE_SIZE);
-
-	if(size > available_memory) //can't load page into main memory: memory full
-	{
-		long* freed_addresses;
-		sc_free(nFrames,freed_addresses);
-	}
-
-}
+//void initializeMemory(Process* proc)
+//{
+//
+//	long size = proc->seg_size;
+//
+//	int nFrames; //number of frames the data will be divided into
+//	nFrames = ceil((float)size / PAGE_SIZE);
+//
+//	if(size > available_memory) //can't load page into main memory: memory full
+//	{
+//		long* freed_addresses;
+//		sc_free(nFrames,freed_addresses);
+//	}
+//
+//}
 
 ////here, assume these attributes are being retrieved from a file
 //Process* processCreate(char* name, int SID, int priority, int seg_size, char* used_semaphores, char* code)
@@ -427,6 +418,46 @@ void showList()
 	printf("\n");
 }
 
+char* getStatus(char st)
+{
+	if(st == 'r')
+		return "Ready";
+	if(st == 'R')
+		return "Running";
+	if(st == 'b')
+		return "Blocked";
+	return "Unknown";
+}
+void viewProcessInfo()
+{
+	if(BCP.head == NULL)
+	{
+		printf("No processes currently scheduled!\n");
+		return;
+	}
+	printf("\nCurrent processes: ");
+	printf("\nPID | Name (Status)\n");
+	printf("-----------------------------------------\n");
+	BCPitem_t* aux = NULL;
+	for(aux = BCP.head;aux;aux = aux->next)
+		printf("%d | %s (%s)\n",aux->PID,aux->proc->name,getStatus(aux->status));
+
+	int search_pid;
+	printf("\nWhich process do you want to view info about?\nPID: ");
+	scanf("%d",&search_pid);
+	int found = 0;
+	for(aux = BCP.head;aux;aux = aux->next)
+		if(aux->PID == search_pid)
+		{
+			printf("\n\n");
+			printProcessInfo(aux->proc);
+			found = 1;
+			break;
+		}
+	if(!found)
+		printf("Invalid PID! Process not found.\n");
+}
+
 void count_used_frames()
 {
 	int count = 0;
@@ -437,16 +468,35 @@ void count_used_frames()
 
 }
 
+int menu()
+{
+	int opt;
+	char filename[128];
+	printf("\nMenu:\n-----------------------------------------------\n[1] Create process\n[2] View process info\n[0] Quit\n\nOption: ");
+	scanf("%d",&opt);
+	switch(opt)
+	{
+		case 1:
+			printf("Program filename: ");
+			scanf(" %[^\n]",filename);
+			processCreate(filename);
+			return 1;
+		case 2:
+			viewProcessInfo();
+			sleep(5);
+			return 1;
+		default: 
+			return 0;
+
+	}
+}
 int main()
 {
 	init_data_structures();
-//	Process* p1 = processCreate("proc1",1,1,30,"s t", NULL);
-//	memLoadReq(p1);
-//	queueTest();
-//	readProgramfromDisk("synthetic_2.prog");
-//	printProcessInfo(readProgramfromDisk("synthetic_2.prog"));
-	processCreate("synthetic_2.prog");
-	processCreate("synthetic_2.prog");
-//	showList(BCP.head);
+//	processCreate("synthetic_2.prog");
+	while(1)
+	{
+		menu();
+	}
 	
 }
