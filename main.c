@@ -80,11 +80,24 @@ typedef struct bcp
 	BCPitem_t* head;
 } BCP_t;
 
+typedef struct ioop
+{
+	BCPitem_t* process; //stores a pointer to the blocked process
+	char type; //r: read, w: write
+	int remaining_time;
+	struct ioop* next;
+}IOop_t;
+
+typedef struct ioqueue
+{
+	IOop_t* head;
+} IOqueue_t;
 
 //Global variables:
 //------------------------------------------------------------------------------
 frameTable_t  frameTable;
 BCP_t BCP;
+IOqueue_t IOqueue;
 volatile int PID = 0;
 volatile long cpuclock = 0;
 volatile int stop = 0;
@@ -99,6 +112,52 @@ void init_data_structures()
 
 	//BCP
 	BCP.head = NULL;
+
+	//IO queue
+	IOqueue.head = NULL;
+}
+
+void io_queue_add(BCPitem_t* item, char type)
+{
+	pthread_mutex_lock(&lock);
+	IOop_t* new = malloc(sizeof(IOop_t));
+	new->process = item;
+	new->type = type;
+	new->next = NULL;
+
+	if(IOqueue.head == NULL)
+	{
+		IOqueue.head = new;
+		pthread_mutex_unlock(&lock);
+		return;
+	}
+
+	IOop_t* aux, *prev = NULL;
+	for(aux = IOqueue.head; aux; prev = aux, aux = aux->next);
+	new->next = aux;
+	if(prev)
+		prev->next = new;
+	else
+		IOqueue.head = new;
+	pthread_mutex_unlock(&lock);
+}
+
+void advanceIOqueue(int time)
+{
+	IOop_t* aux = IOqueue.head;
+
+	for(;aux && time > 0; aux = aux->next)
+		if(aux->remaining_time < time)
+		{
+			IOqueue.head = IOqueue.head->next; //unqueue aux
+			aux->process->status = 'r';
+			time-=aux->remaining_time;
+		}
+		else
+		{
+			aux->remaining_time -= time;
+			time = 0;
+		}
 }
 
 void Free(BCPitem_t* a)
@@ -430,9 +489,12 @@ long calculateRemainingTime(Process* proc)
 
 void queueProcess(BCPitem_t* proc) //adds proc into the scheduling list
 {
+	pthread_mutex_lock(&lock);
 	if(BCP.head == NULL)
 	{
 		BCP.head = proc;
+		proc->status = 'R';
+		pthread_mutex_unlock(&lock);
 		return;
 	}
 	
@@ -443,7 +505,11 @@ void queueProcess(BCPitem_t* proc) //adds proc into the scheduling list
 	if(prev)
 		prev->next = proc;
 	else
+	{
 		BCP.head = proc;
+		proc->status = 'R';
+	}
+	pthread_mutex_unlock(&lock);
 }
 
 void processCreate(char* filename)
@@ -523,12 +589,13 @@ char* getStatus(char st)
 }
 void viewProcessInfo()
 {
+	pthread_mutex_lock(&lock);
 	if(BCP.head == NULL)
 	{
 		printf("No processes currently scheduled!\n");
+		pthread_mutex_unlock(&lock);
 		return;
 	}
-	pthread_mutex_lock(&lock);
 	printf("\nCurrent processes: ");
 	printf("\nPID | Name (Status)\n");
 	printf("-----------------------------------------\n");
@@ -603,11 +670,33 @@ void interpreter(BCPitem_t* curr)
 {
 	Process* proc = curr->proc;
 	command_t* instruction = proc->code[curr->next_instruction];
-//	if(strcmp(instruction->call,"exec") == 0)
-//		printf("exec");
-	printf("%s %d\n",instruction->call,instruction->arg);
 
-	curr->next_instruction++;
+	if(strcmp(instruction->call,"exec") == 0)
+	{
+		cpuclock += instruction->arg;
+		curr->remaining_time-=instruction->arg;
+		advanceIOqueue(instruction->arg);
+		curr->next_instruction++;
+		return;
+	}
+	if(strcmp(instruction->call,"read") == 0)
+	{
+//		BCP.head = BCP.head->next; //unqueues current process and goes to the next
+		curr_running = NULL;
+		curr->status = 'b';
+		//io_queue_add(curr,'r');
+
+	}
+
+	if(strcmp(instruction->call,"write") == 0)
+	{
+//		BCP.head = BCP.head->next; //unqueues current process and goes to the next
+		curr_running = NULL;
+		curr->status = 'b';
+		io_queue_add(curr,'w');
+
+	}
+
 }
 void* mainLoop()
 {
@@ -615,11 +704,13 @@ void* mainLoop()
 	while(!stop)
 	{
 		curr_running = BCP.head;
+		while(curr_running && curr_running->status == 'b') //skip blocked processes
+			curr_running = curr_running->next;
 		if(curr_running)
 		{
 			sleep(1);
 			interpreter(curr_running);
-			if(curr_running->next_instruction >= curr_running->proc->nCommands)
+			if(curr_running != NULL && curr_running->next_instruction >= curr_running->proc->nCommands)
 			{
 				BCP.head = BCP.head->next; //process exited
 				Free(curr_running);
@@ -638,5 +729,12 @@ int main()
 	pthread_create(&kernel,NULL,&mainLoop,NULL);
 	pthread_join(kernel,NULL);
 	pthread_join(sim_menu,NULL);
+
+//	processCreate("synthetic_2.prog");
+//	BCPitem_t* cur = BCP.head;
+//	for(int i = 0; i < cur->proc->nCommands; i++)
+////		printf("%s %d\n",cur->proc->code[i]->call,cur->proc->code[i]->arg);
+//		if(strcmp(cur->proc->code[i]->call,"exec") == 0)
+//			printf("exec\n");
 	
 }
