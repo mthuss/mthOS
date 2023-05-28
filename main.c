@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <math.h>
 #include <string.h>
+#include <pthread.h>
 
 //1GB de memória
 #define MAX_MEM_SIZE 1074000000
@@ -19,6 +20,8 @@
 #define FILE_EXT ".prog"
 
 long available_memory = MAX_MEM_SIZE;
+
+pthread_mutex_t lock;
 
 
 typedef struct memoryPage
@@ -44,6 +47,11 @@ typedef struct memoryFrameTable
 	memPage* frame[NUMBER_OF_FRAMES];
 } frameTable_t;
 
+typedef struct cmd{
+	int arg;
+	char* call;
+} command_t;
+
 typedef struct proc
 {
 	char name[8]; //limited to 8 bytes
@@ -51,15 +59,16 @@ typedef struct proc
 	int priority; //won't actually be used
 	int seg_size; //in kbytes
 	char* used_semaphores; //list of semaphores, separated by spaces
-	char* code;
 	pageTable_t* pTable;
+	command_t** code; //list of commands that comprise the code of the program
+	int nCommands; //number of commands the program has
 	
 } Process;
 
 typedef struct bcp_item
 {
 	Process* proc;
-	char* next_instruction;
+	int next_instruction;
 	char status; //r: ready, R: running, b: blocked 
 	long remaining_time;
 	int PID;
@@ -71,11 +80,14 @@ typedef struct bcp
 	BCPitem_t* head;
 } BCP_t;
 
+
 //Global variables:
 //------------------------------------------------------------------------------
 frameTable_t  frameTable;
 BCP_t BCP;
 volatile int PID = 0;
+volatile long cpuclock = 0;
+volatile int stop = 0;
 
 //Functions:
 //------------------------------------------------------------------------------
@@ -89,6 +101,15 @@ void init_data_structures()
 	BCP.head = NULL;
 }
 
+void Free(BCPitem_t* a)
+{
+	pthread_mutex_lock(&lock);
+	free(a->proc->pTable);
+	free(a->proc->code);
+	free(a->proc);
+	free(a);
+	pthread_mutex_unlock(&lock);
+}
 int validateFilename(char* filename)
 {
 	int i;
@@ -103,6 +124,56 @@ int validateFilename(char* filename)
 	return 0;
 }
 
+command_t** parsecommands(char* code, int* inst_counter)
+{
+	char temp[100];
+	int i;
+	int count = 0;
+	for(i = 0; code[i] != '\0'; i++)
+		if(code[i] == '\n' || code[i] == '\0')
+			count++;
+//	printf("count: %d\n",count);
+	*inst_counter = count;
+
+	char** lines = malloc(count*sizeof(char*));
+	command_t** cmd = malloc(count*sizeof(command_t*));
+	int oldcount = count;
+
+	count = 0;
+	int j;
+	pthread_mutex_lock(&lock);
+	i = 0;
+	while(code[i] != '\0')
+	{
+		for(j = 0; code[i] != '\n'; i++, j++)
+		{
+			temp[j] = code[i];
+		}
+		temp[j] = '\0';
+		lines[count] = malloc(j);
+		strncpy(lines[count],temp,j);
+		count++;
+		if(code[i] == '\0')
+			break;
+
+		i++; //go to next line
+	}
+	pthread_mutex_unlock(&lock);
+
+	char* arg = NULL;
+	for(i = 0; i < count; i++)
+	{
+		cmd[i] = malloc(sizeof(command_t));
+		cmd[i]->call = strtok(lines[i]," ");
+		arg = strtok(NULL," ");
+		if(arg)
+			cmd[i]->arg = (int)strtol(arg,NULL,10);
+		else
+			cmd[i]->arg = -1;
+	}
+	return cmd;
+
+}
 //make sure to check for NULL returns whenever this function is called
 Process* readProgramfromDisk(char* filename)
 {
@@ -171,18 +242,22 @@ Process* readProgramfromDisk(char* filename)
 	proc->used_semaphores[num_of_semaphores] = '\0';
 	
 
-	proc->code = malloc(filesize - ftell(file) + 1); //+1 for a null terminator
+	char* code = malloc(filesize - ftell(file) + 1); //+1 for a null terminator
 	i = 0;
+	fgetc(file); //consume semaphore's newline
 	while(1) //save the remainder of the file as code
 	{
 		c = fgetc(file);
 		if(c == EOF)
 			break;
-		proc->code[i] = c;
+		code[i] = c;
 		i++;
 			
 	}
-	proc->code[i] = '\0';
+	code[i] = '\0';
+	int inst_number;
+	proc->code = parsecommands(code,&inst_number);
+	proc->nCommands = inst_number;
 	
 	fclose(file);
 
@@ -197,10 +272,18 @@ void printProcessInfo(Process* proc)
 	for(int i = 0; proc->used_semaphores[i] != '\0'; i++)
 		printf("%c ",proc->used_semaphores[i]);
 	printf("\n\n");
-	printf("---------------------------\n");
-	printf("Code:\n%s",proc->code);
-	printf("---------------------------\n");
+//	printf("---------------------------\n");
+//	printf("Code:\n");
+//	for(int i = 0; i < proc->nCommands; i++)
+//	{
+//		printf("%s ",proc->code[i]->call);
+//		if(proc->code[i]->arg != -1)
+//			printf("%d",proc->code[i]->arg);
+//		printf("\n");
+//	}	
+//	printf("---------------------------\n");
 }
+
 //checks if the requested virtual address is already in memory
 //apparently won't be used, since the only memory transaction that will be done is that of loading a process into memory (once).
 int pageFault(Process* proc, long virt_addr)
@@ -310,30 +393,40 @@ int isDigit(char c)
 
 long calculateRemainingTime(Process* proc)
 {
-	char* code = proc->code;
 	long remaining_time = 0;
-
-	int i,j;
-	i = 0;
-	char time[10];
-	while(1)
+	for(int i = 0; i < proc->nCommands; i++)
 	{
-		if(isDigit(code[i]))
-		{
-			for(j = 0; isDigit(code[i]); i++, j++)
-				time[j] = code[i];
-			time[j] = '\0';
-
-			remaining_time += strtol(time,NULL,10); 
-		}
-		if(code[i] == '\0')
-			break;
-		i++;
-
+		if(proc->code[i]->arg != -1)
+			remaining_time += proc->code[i]->arg;
 	}
-
 	return remaining_time;
+
 }
+//{
+//	command_t* code[] = proc->code;
+//	long remaining_time = 0;
+//
+//	int i,j;
+//	i = 0;
+//	char time[10];
+//	while(1)
+//	{
+//		if(isDigit(code[i]))
+//		{
+//			for(j = 0; isDigit(code[i]); i++, j++)
+//				time[j] = code[i];
+//			time[j] = '\0';
+//
+//			remaining_time += strtol(time,NULL,10); 
+//		}
+//		if(code[i] == '\0')
+//			break;
+//		i++;
+//
+//	}
+//
+//	return remaining_time;
+//}
 
 void queueProcess(BCPitem_t* proc) //adds proc into the scheduling list
 {
@@ -360,7 +453,7 @@ void processCreate(char* filename)
 	BCPitem_t* new = malloc(sizeof(BCPitem_t));
 	new->proc = NULL;
 	new->next = NULL;
-	new->next_instruction = NULL;
+	new->next_instruction = 0;
 	new->proc = memLoadReq(filename);
 	new->PID = PID;
 	PID++;
@@ -435,6 +528,7 @@ void viewProcessInfo()
 		printf("No processes currently scheduled!\n");
 		return;
 	}
+	pthread_mutex_lock(&lock);
 	printf("\nCurrent processes: ");
 	printf("\nPID | Name (Status)\n");
 	printf("-----------------------------------------\n");
@@ -451,11 +545,14 @@ void viewProcessInfo()
 		{
 			printf("\n\n");
 			printProcessInfo(aux->proc);
+			printf("next instruction: %d\n",aux->next_instruction);
 			found = 1;
 			break;
 		}
 	if(!found)
 		printf("Invalid PID! Process not found.\n");
+	pthread_mutex_unlock(&lock);
+	return;
 }
 
 void count_used_frames()
@@ -468,35 +565,78 @@ void count_used_frames()
 
 }
 
-int menu()
+void* menu()
 {
 	int opt;
 	char filename[128];
-	printf("\nMenu:\n-----------------------------------------------\n[1] Create process\n[2] View process info\n[0] Quit\n\nOption: ");
-	scanf("%d",&opt);
-	switch(opt)
-	{
-		case 1:
-			printf("Program filename: ");
-			scanf(" %[^\n]",filename);
-			processCreate(filename);
-			return 1;
-		case 2:
-			viewProcessInfo();
-			sleep(5);
-			return 1;
-		default: 
-			return 0;
+	do{
 
+		printf("\nMenu:\n-----------------------------------------------\n[1] Create process\n[2] View process info\n[0] Quit\n");
+		printf("\nOption: ");
+		scanf("%d",&opt);
+		switch(opt)
+		{
+			case 0: 
+				stop = 1;
+				break;
+			case 1:
+				printf("Program filename: ");
+				scanf(" %[^\n]",filename);
+				processCreate(filename);
+				break;
+			case 2:
+				viewProcessInfo();
+				sleep(3);
+				break;
+			default: 
+				printf("Invalid option!\n");
+				break;
+
+		}
+	}while(opt != 0);
+}
+
+BCPitem_t* curr_running = NULL;
+
+
+void interpreter(BCPitem_t* curr)
+{
+	Process* proc = curr->proc;
+	command_t* instruction = proc->code[curr->next_instruction];
+//	if(strcmp(instruction->call,"exec") == 0)
+//		printf("exec");
+	printf("%s %d\n",instruction->call,instruction->arg);
+
+	curr->next_instruction++;
+}
+void* mainLoop()
+{
+	sleep(5);
+	while(!stop)
+	{
+		curr_running = BCP.head;
+		if(curr_running)
+		{
+			sleep(1);
+			interpreter(curr_running);
+			if(curr_running->next_instruction >= curr_running->proc->nCommands)
+			{
+				BCP.head = BCP.head->next; //process exited
+				Free(curr_running);
+			}
+		}
 	}
+		
 }
 int main()
 {
 	init_data_structures();
-//	processCreate("synthetic_2.prog");
-	while(1)
-	{
-		menu();
-	}
+	pthread_mutex_init(&lock,NULL);
+	pthread_t kernel;
+	pthread_t sim_menu;
+	pthread_create(&sim_menu,NULL,menu,NULL);
+	pthread_create(&kernel,NULL,&mainLoop,NULL);
+	pthread_join(kernel,NULL);
+	pthread_join(sim_menu,NULL);
 	
 }
