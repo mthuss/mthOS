@@ -7,7 +7,9 @@
 #include <stdlib.h>
 #include <math.h>
 #include <string.h>
+#include <unistd.h>
 #include <pthread.h>
+#include <semaphore.h>
 
 //1GB de memória
 #define MAX_MEM_SIZE 1074000000
@@ -83,7 +85,7 @@ typedef struct bcp
 typedef struct ioop
 {
 	BCPitem_t* process; //stores a pointer to the blocked process
-	char type; //r: read, w: write
+	char type; //r: read, w: write, p: print
 	int remaining_time;
 	struct ioop* next;
 }IOop_t;
@@ -98,9 +100,11 @@ typedef struct ioqueue
 frameTable_t  frameTable;
 BCP_t BCP;
 IOqueue_t IOqueue;
+BCPitem_t* curr_running = NULL;
 volatile int PID = 0;
 volatile long cpuclock = 0;
 volatile int stop = 0;
+sem_t list_sem;
 
 //Functions:
 //------------------------------------------------------------------------------
@@ -121,6 +125,7 @@ void io_queue_add(BCPitem_t* item, char type)
 {
 	pthread_mutex_lock(&lock);
 	IOop_t* new = malloc(sizeof(IOop_t));
+	new->remaining_time = item->proc->code[item->next_instruction]->arg;
 	new->process = item;
 	new->type = type;
 	new->next = NULL;
@@ -142,22 +147,95 @@ void io_queue_add(BCPitem_t* item, char type)
 	pthread_mutex_unlock(&lock);
 }
 
-void advanceIOqueue(int time)
+//void advanceIOqueue(int time)
+//{
+//	IOop_t* aux = IOqueue.head;
+//
+//	for(;aux && time > 0; aux = aux->next)
+//		if(aux->remaining_time < time)
+//		{
+//			IOqueue.head = IOqueue.head->next; //unqueue aux
+//			aux->process->status = 'r';
+//			time-=aux->remaining_time;
+//		}
+//		else
+//		{
+//			aux->remaining_time -= time;
+//			time = 0;
+//		}
+//}
+void queueProcess(BCPitem_t* proc) //adds proc into the scheduling list
+{
+	if(BCP.head == NULL)
+	{
+		BCP.head = proc;
+//		proc->status = 'R';
+		sem_post(&list_sem);
+		return;
+	}
+	
+	//ordering by shortest remaining time
+	BCPitem_t *aux, *prev = NULL;
+	for(aux = BCP.head; aux != NULL && aux->remaining_time < proc->remaining_time; prev = aux, aux = aux->next);
+	proc->next = aux;
+	if(prev)
+		prev->next = proc;
+	else //proc is the new head
+	{
+		BCP.head = proc;
+//		proc->status = 'R';
+	}
+//	sem_post(&list_sem);
+}
+
+void dequeueProcess(BCPitem_t* item)
+{
+	BCPitem_t *aux = BCP.head, *prev = NULL;
+	for(; aux && aux != item; prev = aux, aux = aux->next);
+	if(aux)
+	{
+		if(prev)
+			prev->next = aux->next;
+		else //aux is the current head
+			BCP.head = BCP.head->next;
+		aux->next = NULL;
+	}
+	else
+		printf("Something went really wrong!!\n");
+
+}
+
+void processInterrupt() // interrupt current process and reschedule it
+{
+	BCPitem_t* curr = curr_running;
+	if(curr)
+	{
+		curr->status = 'r';
+		dequeueProcess(curr);
+		queueProcess(curr);
+	}
+}
+void advanceIOqueue()
 {
 	IOop_t* aux = IOqueue.head;
-
-	for(;aux && time > 0; aux = aux->next)
-		if(aux->remaining_time < time)
+	if(aux)
+	{
+		aux->remaining_time--;
+		aux->process->remaining_time--;
+		if(aux->remaining_time == 0) //IO operation finished
 		{
-			IOqueue.head = IOqueue.head->next; //unqueue aux
 			aux->process->status = 'r';
-			time-=aux->remaining_time;
+			IOqueue.head = IOqueue.head->next;
+
+			processInterrupt();
+			//reschedule the now unblocked process
+			dequeueProcess(aux->process);
+			queueProcess(aux->process);
+			aux->process->next_instruction++;
+
+			
 		}
-		else
-		{
-			aux->remaining_time -= time;
-			time = 0;
-		}
+	}
 }
 
 void Free(BCPitem_t* a)
@@ -487,30 +565,6 @@ long calculateRemainingTime(Process* proc)
 //	return remaining_time;
 //}
 
-void queueProcess(BCPitem_t* proc) //adds proc into the scheduling list
-{
-	pthread_mutex_lock(&lock);
-	if(BCP.head == NULL)
-	{
-		BCP.head = proc;
-//		proc->status = 'R';
-		pthread_mutex_unlock(&lock);
-		return;
-	}
-	
-	//ordering by shortest remaining time
-	BCPitem_t *aux, *prev = NULL;
-	for(aux = BCP.head; aux != NULL && aux->remaining_time < proc->remaining_time; prev = aux, aux = aux->next);
-	proc->next = aux;
-	if(prev)
-		prev->next = proc;
-	else
-	{
-		BCP.head = proc;
-//		proc->status = 'R';
-	}
-	pthread_mutex_unlock(&lock);
-}
 
 void processCreate(char* filename)
 {
@@ -532,9 +586,18 @@ void processCreate(char* filename)
 
 	new->remaining_time = calculateRemainingTime(new->proc);
 
+	pthread_mutex_lock(&lock);
+	processInterrupt();
 	//queue the process in the scheduling list	
 	queueProcess(new);
+	pthread_mutex_unlock(&lock);
 	printf("started process %s\n\n",new->proc->name);
+}
+
+void processFinish(BCPitem_t* proc)
+{
+	dequeueProcess(proc);
+	Free(proc);
 }
 
 //void initializeMemory(Process* proc)
@@ -613,6 +676,7 @@ void viewProcessInfo()
 			printf("\n\n");
 			printProcessInfo(aux->proc);
 			printf("next instruction: %d\n",aux->next_instruction);
+			printf("Remaining time: %ld\n",aux->remaining_time);
 			found = 1;
 			break;
 		}
@@ -663,7 +727,6 @@ void* menu()
 	}while(opt != 0);
 }
 
-BCPitem_t* curr_running = NULL;
 
 
 void interpreter(BCPitem_t* curr)
@@ -673,28 +736,73 @@ void interpreter(BCPitem_t* curr)
 
 	if(strcmp(instruction->call,"exec") == 0)
 	{
-		cpuclock += instruction->arg;
-		curr->remaining_time-=instruction->arg;
-		advanceIOqueue(instruction->arg);
-		curr->next_instruction++;
+//		if(IOqueue.head && IOqueue.head->remaining_time < instruction->arg)
+//		{
+//			advanceIOqueue(IOqueue.head->remaining_time);
+//			instruction->arg -= IOqueue.head->remaining_time;
+//			cpuclock += IOqueue.head->remaining_time;
+//			return;
+//		}
+//		cpuclock += instruction->arg;
+		pthread_mutex_lock(&lock);
+		instruction->arg--;
+		curr->remaining_time--;
+
+
+		if(instruction->arg == 0)
+			curr->next_instruction++;
+		pthread_mutex_unlock(&lock);
 		return;
 	}
 	if(strcmp(instruction->call,"read") == 0)
 	{
 //		BCP.head = BCP.head->next; //unqueues current process and goes to the next
+		pthread_mutex_lock(&lock);
 		curr_running = NULL;
 		curr->status = 'b';
+		pthread_mutex_unlock(&lock);
+		io_queue_add(curr,'r');
 		//io_queue_add(curr,'r');
-
 	}
 
 	if(strcmp(instruction->call,"write") == 0)
 	{
 //		BCP.head = BCP.head->next; //unqueues current process and goes to the next
+		pthread_mutex_lock(&lock);
 		curr_running = NULL;
 		curr->status = 'b';
+		pthread_mutex_unlock(&lock);
 		io_queue_add(curr,'w');
 
+	}
+	if(strcmp(instruction->call,"print") == 0)
+	{
+//		BCP.head = BCP.head->next; //unqueues current process and goes to the next
+		pthread_mutex_lock(&lock);
+		curr_running = NULL;
+		curr->status = 'b';
+		pthread_mutex_unlock(&lock);
+		io_queue_add(curr,'p');
+
+	}
+	if(strcmp(instruction->call,"P(s)") == 0)
+	{
+		curr->next_instruction++;
+	}
+
+	if(strcmp(instruction->call,"P(t)") == 0)
+	{
+		curr->next_instruction++;
+	}
+
+	if(strcmp(instruction->call,"V(s)") == 0)
+	{
+		curr->next_instruction++;
+	}
+
+	if(strcmp(instruction->call,"V(t)") == 0)
+	{
+		curr->next_instruction++;
 	}
 
 }
@@ -703,26 +811,36 @@ void* mainLoop()
 	sleep(5);
 	while(!stop)
 	{
-		curr_running = BCP.head;
-		while(curr_running && curr_running->status == 'b') //skip blocked processes
-			curr_running = curr_running->next;
+//		while(!curr_running)
+//		{
+			curr_running = BCP.head;
+			while(curr_running && curr_running->status == 'b') //skip blocked processes
+				curr_running = curr_running->next;
+//			if(!curr_running)
+//				sem_wait(&list_sem); //wait for a ready process to be added
+//		}
 		if(curr_running)
 		{
 			curr_running->status = 'R';
-			sleep(1);
 			interpreter(curr_running);
 			if(curr_running != NULL && curr_running->next_instruction >= curr_running->proc->nCommands)
 			{
-				BCP.head = BCP.head->next; //process exited
-				Free(curr_running);
+				processFinish(curr_running);
 			}
 		}
+		pthread_mutex_lock(&lock);
+		advanceIOqueue();
+		pthread_mutex_unlock(&lock);
+		cpuclock++;
+//		sleep(1);
+		usleep(10000);
 	}
 		
 }
 int main()
 {
 	init_data_structures();
+	sem_init(&list_sem,0,0);
 	pthread_mutex_init(&lock,NULL);
 	pthread_t kernel;
 	pthread_t sim_menu;
