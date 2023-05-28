@@ -493,7 +493,7 @@ void queueProcess(BCPitem_t* proc) //adds proc into the scheduling list
 	if(BCP.head == NULL)
 	{
 		BCP.head = proc;
-		proc->status = 'R';
+//		proc->status = 'R';
 		pthread_mutex_unlock(&lock);
 		return;
 	}
@@ -507,7 +507,7 @@ void queueProcess(BCPitem_t* proc) //adds proc into the scheduling list
 	else
 	{
 		BCP.head = proc;
-		proc->status = 'R';
+//		proc->status = 'R';
 	}
 	pthread_mutex_unlock(&lock);
 }
@@ -708,6 +708,7 @@ void* mainLoop()
 			curr_running = curr_running->next;
 		if(curr_running)
 		{
+			curr_running->status = 'R';
 			sleep(1);
 			interpreter(curr_running);
 			if(curr_running != NULL && curr_running->next_instruction >= curr_running->proc->nCommands)
