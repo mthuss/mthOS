@@ -105,6 +105,7 @@ volatile int PID = 0;
 volatile long cpuclock = 0;
 volatile int stop = 0;
 sem_t list_sem;
+sem_t sem;
 
 //Functions:
 //------------------------------------------------------------------------------
@@ -132,6 +133,7 @@ void io_queue_add(BCPitem_t* item, char type)
 	if(IOqueue.head == NULL)
 	{
 		IOqueue.head = new;
+//		sem_post(&list_sem);
 		return;
 	}
 
@@ -142,6 +144,7 @@ void io_queue_add(BCPitem_t* item, char type)
 		prev->next = new;
 	else
 		IOqueue.head = new;
+//	sem_post(&list_sem);
 }
 
 //void advanceIOqueue(int time)
@@ -167,7 +170,7 @@ void queueProcess(BCPitem_t* proc) //adds proc into the scheduling list
 	{
 		BCP.head = proc;
 //		proc->status = 'R';
-		sem_post(&list_sem);
+//		sem_post(&list_sem);
 		return;
 	}
 	
@@ -237,12 +240,12 @@ void advanceIOqueue()
 
 void Free(BCPitem_t* a)
 {
-	pthread_mutex_lock(&lock);
+	sem_wait(&sem);
 	free(a->proc->pTable);
 	free(a->proc->code);
 	free(a->proc);
 	free(a);
-	pthread_mutex_unlock(&lock);
+	sem_post(&sem);
 }
 int validateFilename(char* filename)
 {
@@ -275,7 +278,7 @@ command_t** parsecommands(char* code, int* inst_counter)
 
 	count = 0;
 	int j;
-	pthread_mutex_lock(&lock);
+	sem_wait(&sem);
 	i = 0;
 	while(code[i] != '\0')
 	{
@@ -292,10 +295,10 @@ command_t** parsecommands(char* code, int* inst_counter)
 
 		i++; //go to next line
 	}
-	printf("code:\n");
-	for(int i = 0; i < *inst_counter; i++)
-		printf("%s\n",lines[i]);
-	pthread_mutex_unlock(&lock);
+//	printf("code:\n");
+//	for(int i = 0; i < *inst_counter; i++)
+//		printf("%s\n",lines[i]);
+	sem_post(&sem);
 
 	char* arg = NULL;
 	for(i = 0; i < count; i++)
@@ -586,11 +589,11 @@ void processCreate(char* filename)
 
 	new->remaining_time = calculateRemainingTime(new->proc);
 
-	pthread_mutex_lock(&lock);
+	sem_wait(&sem);
 	processInterrupt();
 	//queue the process in the scheduling list	
 	queueProcess(new);
-	pthread_mutex_unlock(&lock);
+	sem_post(&sem);
 	printf("started process %s\n\n",new->proc->name);
 }
 
@@ -652,11 +655,11 @@ char* getStatus(char st)
 }
 void viewProcessInfo()
 {
-	pthread_mutex_lock(&lock);
+	sem_wait(&sem);
 	if(BCP.head == NULL)
 	{
 		printf("No processes currently scheduled!\n");
-		pthread_mutex_unlock(&lock);
+		sem_post(&sem);
 		return;
 	}
 	printf("\nCurrent processes: ");
@@ -682,7 +685,7 @@ void viewProcessInfo()
 		}
 	if(!found)
 		printf("Invalid PID! Process not found.\n");
-	pthread_mutex_unlock(&lock);
+	sem_post(&sem);
 	return;
 }
 
@@ -698,6 +701,7 @@ void count_used_frames()
 
 void* menu()
 {
+	processCreate("synthetic_2.prog");
 	processCreate("synthetic_2.prog");
 	int opt;
 	char filename[128];
@@ -745,7 +749,7 @@ void interpreter(BCPitem_t* curr)
 //			return;
 //		}
 //		cpuclock += instruction->arg;
-		pthread_mutex_lock(&lock);
+		sem_wait(&sem);
 		instruction->arg--;
 		curr->remaining_time--;
 
@@ -756,71 +760,70 @@ void interpreter(BCPitem_t* curr)
 //			if(curr->proc->code[curr->next_instruction])
 //			printf("%s %d\n",curr->proc->code[curr->next_instruction]->call, curr->proc->code[curr->next_instruction]->arg);
 		}
-		pthread_mutex_unlock(&lock);
+		sem_post(&sem);
 		return;
 	}
 	if(strcmp(instruction->call,"read") == 0)
 	{
 //		BCP.head = BCP.head->next; //unqueues current process and goes to the next
-		pthread_mutex_lock(&lock);
+		sem_wait(&sem);
 		curr_running = NULL;
 		curr->status = 'b';
 		io_queue_add(curr,'r');
-		pthread_mutex_unlock(&lock);
+		sem_post(&sem);
 	}
 
 	if(strcmp(instruction->call,"write") == 0)
 	{
 //		BCP.head = BCP.head->next; //unqueues current process and goes to the next
-		pthread_mutex_lock(&lock);
+		sem_wait(&sem);
 		curr_running = NULL;
 		curr->status = 'b';
 		io_queue_add(curr,'w');
-		pthread_mutex_unlock(&lock);
+		sem_post(&sem);
 
 	}
 	if(strcmp(instruction->call,"print") == 0)
 	{
 //		BCP.head = BCP.head->next; //unqueues current process and goes to the next
-		pthread_mutex_lock(&lock);
+		sem_wait(&sem);
 		curr_running = NULL;
 		curr->status = 'b';
 		io_queue_add(curr,'p');
-		pthread_mutex_unlock(&lock);
+		sem_post(&sem);
 
 	}
 	if(strcmp(instruction->call,"P(s)") == 0)
 	{
-		pthread_mutex_lock(&lock);
+		sem_wait(&sem);
 		curr->next_instruction++;
-		pthread_mutex_unlock(&lock);
+		sem_post(&sem);
 	}
 
 	if(strcmp(instruction->call,"P(t)") == 0)
 	{
-		pthread_mutex_lock(&lock);
+		sem_wait(&sem);
 		curr->next_instruction++;
-		pthread_mutex_unlock(&lock);
+		sem_post(&sem);
 	}
 
 	if(strcmp(instruction->call,"V(s)") == 0)
 	{
-		pthread_mutex_lock(&lock);
+		sem_wait(&sem);
 		curr->next_instruction++;
-		pthread_mutex_unlock(&lock);
+		sem_post(&sem);
 	}
 
 	if(strcmp(instruction->call,"V(t)") == 0)
 	{
-		pthread_mutex_lock(&lock);
+		sem_wait(&sem);
 		curr->next_instruction++;
-		pthread_mutex_unlock(&lock);
+		sem_post(&sem);
 	}
 
 }
 void* mainLoop()
 {
-	sleep(5);
 	while(!stop)
 	{
 //		while(!curr_running)
@@ -840,20 +843,20 @@ void* mainLoop()
 				processFinish(curr_running);
 			}
 		}
-		pthread_mutex_lock(&lock);
+		sem_wait(&sem);
 		advanceIOqueue();
-		pthread_mutex_unlock(&lock);
+		sem_post(&sem);
 		cpuclock++;
-//		sleep(1);
-	//	usleep(10000);
+		usleep(1000);
 	}
 		
 }
 int main()
 {
 	init_data_structures();
-	sem_init(&list_sem,0,0);
-	pthread_mutex_init(&lock,NULL);
+//	sem_init(&list_sem,0,0);
+	sem_init(&sem,0,1);
+//	pthread_mutex_init(&lock,NULL);
 	pthread_t kernel;
 	pthread_t sim_menu;
 	pthread_create(&sim_menu,NULL,menu,NULL);
