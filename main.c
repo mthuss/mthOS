@@ -123,7 +123,6 @@ void init_data_structures()
 
 void io_queue_add(BCPitem_t* item, char type)
 {
-	pthread_mutex_lock(&lock);
 	IOop_t* new = malloc(sizeof(IOop_t));
 	new->remaining_time = item->proc->code[item->next_instruction]->arg;
 	new->process = item;
@@ -133,7 +132,6 @@ void io_queue_add(BCPitem_t* item, char type)
 	if(IOqueue.head == NULL)
 	{
 		IOqueue.head = new;
-		pthread_mutex_unlock(&lock);
 		return;
 	}
 
@@ -144,7 +142,6 @@ void io_queue_add(BCPitem_t* item, char type)
 		prev->next = new;
 	else
 		IOqueue.head = new;
-	pthread_mutex_unlock(&lock);
 }
 
 //void advanceIOqueue(int time)
@@ -225,13 +222,13 @@ void advanceIOqueue()
 		if(aux->remaining_time == 0) //IO operation finished
 		{
 			aux->process->status = 'r';
+			aux->process->next_instruction++;
 			IOqueue.head = IOqueue.head->next;
 
 			processInterrupt();
 			//reschedule the now unblocked process
 			dequeueProcess(aux->process);
 			queueProcess(aux->process);
-			aux->process->next_instruction++;
 
 			
 		}
@@ -287,14 +284,17 @@ command_t** parsecommands(char* code, int* inst_counter)
 			temp[j] = code[i];
 		}
 		temp[j] = '\0';
-		lines[count] = malloc(j);
-		strncpy(lines[count],temp,j);
+		lines[count] = malloc(strlen(temp)+1);
+		strcpy(lines[count],temp);
 		count++;
 		if(code[i] == '\0')
 			break;
 
 		i++; //go to next line
 	}
+	printf("code:\n");
+	for(int i = 0; i < *inst_counter; i++)
+		printf("%s\n",lines[i]);
 	pthread_mutex_unlock(&lock);
 
 	char* arg = NULL;
@@ -698,6 +698,7 @@ void count_used_frames()
 
 void* menu()
 {
+	processCreate("synthetic_2.prog");
 	int opt;
 	char filename[128];
 	do{
@@ -750,7 +751,11 @@ void interpreter(BCPitem_t* curr)
 
 
 		if(instruction->arg == 0)
+		{
 			curr->next_instruction++;
+//			if(curr->proc->code[curr->next_instruction])
+//			printf("%s %d\n",curr->proc->code[curr->next_instruction]->call, curr->proc->code[curr->next_instruction]->arg);
+		}
 		pthread_mutex_unlock(&lock);
 		return;
 	}
@@ -760,9 +765,8 @@ void interpreter(BCPitem_t* curr)
 		pthread_mutex_lock(&lock);
 		curr_running = NULL;
 		curr->status = 'b';
-		pthread_mutex_unlock(&lock);
 		io_queue_add(curr,'r');
-		//io_queue_add(curr,'r');
+		pthread_mutex_unlock(&lock);
 	}
 
 	if(strcmp(instruction->call,"write") == 0)
@@ -771,8 +775,8 @@ void interpreter(BCPitem_t* curr)
 		pthread_mutex_lock(&lock);
 		curr_running = NULL;
 		curr->status = 'b';
-		pthread_mutex_unlock(&lock);
 		io_queue_add(curr,'w');
+		pthread_mutex_unlock(&lock);
 
 	}
 	if(strcmp(instruction->call,"print") == 0)
@@ -781,28 +785,36 @@ void interpreter(BCPitem_t* curr)
 		pthread_mutex_lock(&lock);
 		curr_running = NULL;
 		curr->status = 'b';
-		pthread_mutex_unlock(&lock);
 		io_queue_add(curr,'p');
+		pthread_mutex_unlock(&lock);
 
 	}
 	if(strcmp(instruction->call,"P(s)") == 0)
 	{
+		pthread_mutex_lock(&lock);
 		curr->next_instruction++;
+		pthread_mutex_unlock(&lock);
 	}
 
 	if(strcmp(instruction->call,"P(t)") == 0)
 	{
+		pthread_mutex_lock(&lock);
 		curr->next_instruction++;
+		pthread_mutex_unlock(&lock);
 	}
 
 	if(strcmp(instruction->call,"V(s)") == 0)
 	{
+		pthread_mutex_lock(&lock);
 		curr->next_instruction++;
+		pthread_mutex_unlock(&lock);
 	}
 
 	if(strcmp(instruction->call,"V(t)") == 0)
 	{
+		pthread_mutex_lock(&lock);
 		curr->next_instruction++;
+		pthread_mutex_unlock(&lock);
 	}
 
 }
@@ -833,7 +845,7 @@ void* mainLoop()
 		pthread_mutex_unlock(&lock);
 		cpuclock++;
 //		sleep(1);
-		usleep(10000);
+	//	usleep(10000);
 	}
 		
 }
@@ -849,7 +861,6 @@ int main()
 	pthread_join(kernel,NULL);
 	pthread_join(sim_menu,NULL);
 
-//	processCreate("synthetic_2.prog");
 //	BCPitem_t* cur = BCP.head;
 //	for(int i = 0; i < cur->proc->nCommands; i++)
 ////		printf("%s %d\n",cur->proc->code[i]->call,cur->proc->code[i]->arg);
