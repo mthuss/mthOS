@@ -13,6 +13,7 @@
 
 //1GB de memória
 #define MAX_MEM_SIZE 1074000000
+//#define MAX_MEM_SIZE 6 * PAGE_SIZE
 
 //8kbytes
 #define PAGE_SIZE 8192
@@ -20,6 +21,8 @@
 #define NUMBER_OF_FRAMES MAX_MEM_SIZE/PAGE_SIZE
 
 #define FILE_EXT ".prog"
+
+struct proc;
 
 long available_memory = MAX_MEM_SIZE;
 
@@ -29,6 +32,7 @@ pthread_mutex_t lock;
 typedef struct memoryPage
 {
 	//char data[PAGE_SIZE]; //doesn't actually need to store any data
+	long* associated_pTable_entry;
 	char reference_bit;
 } memPage;
 
@@ -56,7 +60,7 @@ typedef struct cmd{
 
 typedef struct proc
 {
-	char name[8]; //limited to 8 bytes
+	char name[17]; //limited to 8 bytes
 	int SID; //Segment ID
 	int priority; //won't actually be used
 	int seg_size; //in kbytes
@@ -101,11 +105,13 @@ frameTable_t  frameTable;
 BCP_t BCP;
 IOqueue_t IOqueue;
 BCPitem_t* curr_running = NULL;
+BCPitem_t* prev_running = NULL;
 volatile int PID = 0;
 volatile long cpuclock = 0;
 volatile int stop = 0;
 sem_t list_sem;
 sem_t sem;
+int proc_switched = 0;
 
 //Functions:
 //------------------------------------------------------------------------------
@@ -122,6 +128,89 @@ void init_data_structures()
 	IOqueue.head = NULL;
 }
 
+int inFrameTable(int pos, Process* proc)
+{
+
+	if(frameTable.frame[pos] == NULL)
+	for(int i = 0; i < ceil((float)proc->seg_size/PAGE_SIZE); i++)
+		if(proc->pTable->address+i == frameTable.frame[pos]->associated_pTable_entry)
+			return 1;
+	return 0;
+}
+
+void reloadProcess(Process* proc)
+{
+	int nFrames = ceil((float)proc->seg_size/PAGE_SIZE);
+	long* address = proc->pTable->address;
+	int i,j, k = 0;
+	int missing = 0;
+	memPage* newPage = NULL;
+	long* associated_page;
+	
+//	for(i = 0; i < nFrames; i++)
+//		if(address[i] != -1)
+//			frameTable.frame[address[i]]->reference_bit = 1;
+//		else
+//			missing++;
+	for(i = 0; i < nFrames; i++)
+		missing++;
+		
+	for(i = 0; i < nFrames; i++)
+		if(address[i] == -1) //not in main memory
+		{
+			if(available_memory == 0)
+			{
+				//find first page with reference bit 0
+				for(j = 0; j <= NUMBER_OF_FRAMES && missing > 0; j++)
+				{
+					if(j == NUMBER_OF_FRAMES)
+						j = 0;
+
+					if(!inFrameTable(j,proc)) //make sure that a page belonging to this process is not unloaded in order to fit another
+					{
+
+						if(frameTable.frame[j]->reference_bit == 1)
+							frameTable.frame[j]->reference_bit = 0;
+						else
+						{
+							*(frameTable.frame[j]->associated_pTable_entry) = -1;
+							free(frameTable.frame[j]);
+							newPage = malloc(sizeof(memPage));
+							memset(newPage,0,sizeof(memPage));
+							newPage->associated_pTable_entry = &(proc->pTable->address[i]);
+							frameTable.frame[j] = newPage;
+							frameTable.frame[j]->reference_bit = 1; //sets reference bit of newPage to 1
+							proc->pTable->address[i] = j;
+							break;
+						}
+					}
+				}
+
+			}
+			else //memory is available for the current page
+			{
+				for(k = 0; k < NUMBER_OF_FRAMES && missing > 0; k++)
+					if(frameTable.frame[k] == NULL)
+					{
+						newPage = malloc(sizeof(memPage));
+						memset(newPage,0,sizeof(memPage));
+//					printf("ass: %ld\n",proc->pTable->address[i]);
+						newPage->associated_pTable_entry = &(proc->pTable->address[i]);
+						frameTable.frame[k] = newPage;
+						frameTable.frame[k]->reference_bit = 1;
+
+						//updates page table
+						proc->pTable->address[i] = k;
+						break;
+					}
+				available_memory -= PAGE_SIZE;
+			}
+			missing--;
+		}
+		else
+			frameTable.frame[address[i]]->reference_bit = 1;
+
+}
 void io_queue_add(BCPitem_t* item, char type)
 {
 	IOop_t* new = malloc(sizeof(IOop_t));
@@ -212,6 +301,7 @@ void processInterrupt() // interrupt current process and reschedule it
 	{
 		curr->status = 'r';
 		dequeueProcess(curr);
+		reloadProcess(curr->proc);
 		queueProcess(curr);
 	}
 }
@@ -412,6 +502,9 @@ void printProcessInfo(Process* proc)
 	for(int i = 0; proc->used_semaphores[i] != '\0'; i++)
 		printf("%c ",proc->used_semaphores[i]);
 	printf("\n\n");
+	printf("Page table:\n");
+	for(int i = 0; i < ceil((float)proc->seg_size/PAGE_SIZE); i++)
+		printf("[%d] address: %ld\n",i,proc->pTable->address[i]);
 //	printf("---------------------------\n");
 //	printf("Code:\n");
 //	for(int i = 0; i < proc->nCommands; i++)
@@ -440,89 +533,101 @@ int pageFault(Process* proc, long virt_addr)
 }
 
 //loads a process into memory and sets its virtual adresses
-Process* memLoadReq(char* file)
-{
-	Process* proc = readProgramfromDisk(file);
-	if(!proc)
-	{
-		printf("Error retrieving program from disk\n");
-		return NULL;
-	}
-	long size = proc->seg_size;
-
-	int nFrames; //number of frames the data will be divided into
-	nFrames = ceil((float)size / PAGE_SIZE);
-
-	//actually load page into memory
-	//-------------------------------------------------------------
-
-	int i = 0;	
-	int j = 0;
-
-	memPage* newPage = NULL;
-	int pageNum = 0;
-	long remaining_size = size;
-
-	while(nFrames > 0)
-	{
-	//	printf("rem: %d | avail: %d\n",remaining_size,available_memory);
-		if(available_memory == 0 || size - nFrames*PAGE_SIZE > available_memory) //no memory available for current page
-		{
-	//		printf("not enough memory!\n");
-			//second chance
-			for(j = 0; j <= NUMBER_OF_FRAMES && nFrames > 0; j++)
-			{
-				if(j == NUMBER_OF_FRAMES)
-					j = 0;
-				if(frameTable.frame[j] != NULL)
-				{
-
-					if(frameTable.frame[j]->reference_bit == 1)
-						frameTable.frame[j]->reference_bit = 0;
-					else
-					{
-						//freed memory is instantly replaced, so the available_memory counter is not changed
-						free(frameTable.frame[j]);
-	//					printf("freed frame %d\n",j);
-						newPage = malloc(sizeof(memPage));
-						memset(newPage,0,sizeof(memPage));
-						frameTable.frame[j] = newPage;
-						frameTable.frame[j]->reference_bit = 1; //sets reference bit of newPage to 1
-
-						//updates page table
-						proc->pTable->address[pageNum] = j;
-						break;
-					}
-				}
-			}
-		}
-		else //memory is available for current page
-		{
-			for(; i < NUMBER_OF_FRAMES && nFrames > 0; i++)
-				if(frameTable.frame[i] == NULL) //find available frames
-				{
-					//initialize new page to be inserted in the frame
-					newPage = malloc(sizeof(memPage));
-					memset(newPage,0,sizeof(memPage));
-
-					frameTable.frame[i] = newPage;
-					frameTable.frame[i]->reference_bit = 1; //sets reference bit of newPage to 1
-
-					//updates page table
-					proc->pTable->address[pageNum] = i;
-					break;
-				}
-			available_memory -= PAGE_SIZE;
-		}
-
-		//update counter variables
-		pageNum++;
-		nFrames--;
-		remaining_size -= PAGE_SIZE;
-	}
-
-	return proc;
-}
+//Process* memLoadReq(char* file)
+//{
+//	Process* proc = readProgramfromDisk(file);
+//	if(!proc)
+//	{
+//		printf("Error retrieving program from disk\n");
+//		return NULL;
+//	}
+//	long size = proc->seg_size;
+//
+//	for(int i = 0; i < ceil((float)proc->seg_size/PAGE_SIZE); i++)
+//		proc->pTable->address[i] = -1;
+//
+////	reloadProcess(proc);
+//	return proc;
+//
+//	int nFrames; //number of frames the data will be divided into
+//	nFrames = ceil((float)size / PAGE_SIZE);
+//
+//	//actually load page into memory
+//	//-------------------------------------------------------------
+//
+//	int i = 0;	
+//	int j = 0;
+//
+//	memPage* newPage = NULL;
+//	int pageNum = 0;
+//	long remaining_size = size;
+//	long* associated_page;
+//
+//	while(nFrames > 0)
+//	{
+//		if(available_memory == 0 || size - nFrames*PAGE_SIZE > available_memory) //no memory available for current page
+//		{
+//			//second chance
+//			for(j = 0; j <= NUMBER_OF_FRAMES && nFrames > 0; j++)
+//			{
+//				if(j == NUMBER_OF_FRAMES)
+//					j = 0;
+//				if(frameTable.frame[j] != NULL)
+//				{
+//
+//					if(frameTable.frame[j]->reference_bit == 1)
+//						frameTable.frame[j]->reference_bit = 0;
+//					else
+//					{
+//						//freed memory is instantly replaced, so the available_memory counter is not changed
+////						*(frameTable.frame[j]->associated_pTable_entry) = -1;
+//						associated_page = frameTable.frame[j]->associated_pTable_entry;
+//						if(!associated_page)
+//							printf("fuck!!!!\n");
+//						//*associated_page = -1;
+//						free(frameTable.frame[j]);
+//	//					printf("freed frame %d\n",j);
+//						newPage = malloc(sizeof(memPage));
+//						memset(newPage,0,sizeof(memPage));
+//						frameTable.frame[j] = newPage;
+//						frameTable.frame[j]->reference_bit = 1; //sets reference bit of newPage to 1
+//
+//						//updates page table
+//						proc->pTable->address[pageNum] = j;
+//						break;
+//					}
+//				}
+//			}
+//		}
+//		else //memory is available for current page
+//		{
+//			for(; i < NUMBER_OF_FRAMES && nFrames > 0; i++)
+//				if(frameTable.frame[i] == NULL) //find available frames
+//				{
+//					//initialize new page to be inserted in the frame
+//					newPage = malloc(sizeof(memPage));
+//					memset(newPage,0,sizeof(memPage));
+//					//newPage->associated_pTable_entry = &proc->pTable->address[pageNum];
+////					printf("ass: %ld\n",proc->pTable->address[pageNum];
+//
+//					frameTable.frame[i] = newPage;
+//					frameTable.frame[i]->reference_bit = 1; //sets reference bit of newPage to 1
+//
+//					//updates page table
+//					proc->pTable->address[pageNum] = i;
+//					break;
+//				}
+//			available_memory -= PAGE_SIZE;
+//		}
+//
+//		//update counter variables
+//		pageNum++;
+//		nFrames--;
+////		remaining_size -= PAGE_SIZE;
+//	}
+//
+//	return proc;
+//}
 
 int isDigit(char c)
 {
@@ -577,7 +682,20 @@ void processCreate(char* filename)
 	new->proc = NULL;
 	new->next = NULL;
 	new->next_instruction = 0;
-	new->proc = memLoadReq(filename);
+//	new->proc = memLoadReq(filename);
+	new->proc = readProgramfromDisk(filename);
+	if(!new->proc)
+	{
+		printf("Error retrieving program from disk\n");
+		return;
+	}
+	long size = new->proc->seg_size;
+
+	for(int i = 0; i < ceil((float)new->proc->seg_size/PAGE_SIZE); i++)
+		new->proc->pTable->address[i] = -1;
+
+	reloadProcess(new->proc);
+
 	new->PID = PID;
 	PID++;
 	new->status = 'r';
@@ -600,6 +718,16 @@ void processCreate(char* filename)
 void processFinish(BCPitem_t* proc)
 {
 	dequeueProcess(proc);
+	long* address = proc->proc->pTable->address;
+	int nFrames = ceil((float)proc->proc->seg_size/PAGE_SIZE);
+	for(int i = 0; i < nFrames; i++) //free the virtual memory
+	{
+		if(address[i] != -1)
+		{
+			frameTable.frame[address[i]] = NULL;
+			available_memory += PAGE_SIZE;
+		}
+	}
 	Free(proc);
 }
 
@@ -701,8 +829,9 @@ void count_used_frames()
 
 void* menu()
 {
-	processCreate("synthetic_2.prog");
-	processCreate("synthetic_2.prog");
+	for(int i = 0; i < 20; i++)
+		processCreate("synthetic_2.prog");
+//	processCreate("synthetic_2.prog");
 	int opt;
 	char filename[128];
 	do{
@@ -828,9 +957,21 @@ void* mainLoop()
 	{
 //		while(!curr_running)
 //		{
+			prev_running = curr_running;
 			curr_running = BCP.head;
 			while(curr_running && curr_running->status == 'b') //skip blocked processes
 				curr_running = curr_running->next;
+			if(prev_running != curr_running)
+			{
+				proc_switched = 1;
+				if(curr_running)
+				{
+
+					sem_wait(&sem);
+					reloadProcess(curr_running->proc);
+					sem_post(&sem);
+				}
+			}
 //			if(!curr_running)
 //				sem_wait(&list_sem); //wait for a ready process to be added
 //		}
@@ -847,7 +988,7 @@ void* mainLoop()
 		advanceIOqueue();
 		sem_post(&sem);
 		cpuclock++;
-		usleep(1000);
+		usleep(100);
 	}
 		
 }
@@ -863,11 +1004,4 @@ int main()
 	pthread_create(&kernel,NULL,&mainLoop,NULL);
 	pthread_join(kernel,NULL);
 	pthread_join(sim_menu,NULL);
-
-//	BCPitem_t* cur = BCP.head;
-//	for(int i = 0; i < cur->proc->nCommands; i++)
-////		printf("%s %d\n",cur->proc->code[i]->call,cur->proc->code[i]->arg);
-//		if(strcmp(cur->proc->code[i]->call,"exec") == 0)
-//			printf("exec\n");
-	
 }
