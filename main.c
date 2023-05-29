@@ -23,10 +23,13 @@
 #define FILE_EXT ".prog"
 
 struct proc;
+struct semaphor;
+struct sem_li;
 
 long available_memory = MAX_MEM_SIZE;
 
 pthread_mutex_t lock;
+
 
 
 typedef struct memoryPage
@@ -84,7 +87,7 @@ typedef struct bcp
 typedef struct ioop
 {
 	BCPitem_t* process; //stores a pointer to the blocked process
-	char type; //r: read, w: write, p: print
+	char type; //r: read, w: write, p: print, i: inactive
 	int remaining_time;
 	struct ioop* next;
 }IOop_t;
@@ -93,6 +96,21 @@ typedef struct ioqueue
 {
 	IOop_t* head;
 } IOqueue_t;
+
+typedef struct semaphor
+{
+	pthread_mutex_t mutex_lock;
+	volatile int v; //semaphore's value
+	struct sem_li* waiting_list; //head of a semaphore's waiting list
+
+} semaphore_t;
+
+typedef struct sem_li
+{
+	BCPitem_t* proc;
+	struct sem_li* next;
+} sem_list_t;
+
 
 //Global variables:
 //------------------------------------------------------------------------------
@@ -106,9 +124,13 @@ volatile long cpuclock = 0;
 volatile int stop = 0;
 volatile int proc_switched = 0;
 sem_t sem;
+semaphore_t semS, semT;
 
 //Functions:
 //------------------------------------------------------------------------------
+void semaphore_init(semaphore_t* semaph, volatile int v);
+void proc_wakeup(BCPitem_t* proc);
+
 void init_data_structures()
 {
 	//frameTable
@@ -120,6 +142,78 @@ void init_data_structures()
 
 	//IO queue
 	IOqueue.head = NULL;
+
+	//mutex semaphore
+	sem_init(&sem,0,1);
+
+	//mutex lock for simulating semaphores
+	pthread_mutex_init(&lock,NULL);
+
+	//initialize simulated semaphores
+	semaphore_init(&semS,1);
+	semaphore_init(&semT,1);
+}
+
+void semaphore_init(semaphore_t* semaph, volatile int v)
+{
+	pthread_mutex_init(&semaph->mutex_lock,NULL);
+	semaph->waiting_list = NULL;
+	semaph->v = v;
+}
+
+void proc_sleep(BCPitem_t* proc)
+{
+	proc->status = 'i';
+	return;
+}
+
+
+void sem_queue(sem_list_t** list, BCPitem_t* proc)
+{
+	printf("Queued process %d\n",proc->PID);
+	sem_list_t* new = malloc(sizeof(sem_list_t));
+	new->next = NULL;
+	new->proc = proc;
+
+	if(*list == NULL)
+	{
+		*list = new;
+		return;
+	}
+	sem_list_t* aux, *prev = NULL;
+	for(aux = *list; aux; prev = aux, aux = aux->next);
+	new->next = aux;
+	if(prev)
+		prev->next = new;
+	else
+		(*list) = new;
+
+		
+}
+//takes the semaphore and the process that requested it
+void semaphoreP(semaphore_t* semaph, BCPitem_t* proc)
+{
+	pthread_mutex_lock(&semaph->mutex_lock);
+	semaph->v--;
+	if(semaph->v < 0)
+	{
+		sem_queue(&semaph->waiting_list,proc);
+		proc_sleep(proc);
+	}
+		pthread_mutex_unlock(&semaph->mutex_lock);
+}
+
+void semaphoreV(semaphore_t* semaph)
+{
+	pthread_mutex_lock(&semaph->mutex_lock);
+	semaph->v++;
+	if(semaph->v <= 0)
+	{
+		BCPitem_t* proc = semaph->waiting_list->proc;
+		semaph->waiting_list = semaph->waiting_list->next;
+		proc_wakeup(proc);
+	}
+	pthread_mutex_unlock(&semaph->mutex_lock);
 }
 
 //checks if any of the pages belonging to a process is stored in a given memory frame
@@ -200,6 +294,7 @@ void memLoadReq(Process* proc)
 			frameTable.frame[address[i]]->reference_bit = 1;
 
 }
+
 void io_queue_add(BCPitem_t* item, char type)
 {
 	IOop_t* new = malloc(sizeof(IOop_t));
@@ -258,6 +353,12 @@ void dequeueProcess(BCPitem_t* item)
 
 }
 
+void proc_wakeup(BCPitem_t* proc)
+{
+	proc->status = 'r';
+	dequeueProcess(proc);
+	queueProcess(proc);
+}
 void processInterrupt() // interrupt current process and reschedule it
 {
 	BCPitem_t* curr = curr_running;
@@ -575,6 +676,8 @@ char* getStatus(char st)
 		return "Running";
 	if(st == 'b')
 		return "Blocked";
+	if(st == 'i')
+		return "Inactive";
 	return "Unknown";
 }
 void viewProcessInfo()
@@ -627,8 +730,8 @@ void count_used_frames()
 
 void* menu()
 {
-	for(int i = 0; i < 20; i++)
-		processCreate("synthetic_2.prog");
+//	for(int i = 0; i < 20; i++)
+//		processCreate("synthetic_2.prog");
 	int opt;
 	char filename[128];
 	do{
@@ -708,6 +811,7 @@ void interpreter(BCPitem_t* curr)
 	{
 		sem_wait(&sem);
 		curr->next_instruction++;
+		semaphoreP(&semS,curr);
 		sem_post(&sem);
 	}
 
@@ -715,6 +819,7 @@ void interpreter(BCPitem_t* curr)
 	{
 		sem_wait(&sem);
 		curr->next_instruction++;
+		semaphoreP(&semT,curr);
 		sem_post(&sem);
 	}
 
@@ -722,6 +827,7 @@ void interpreter(BCPitem_t* curr)
 	{
 		sem_wait(&sem);
 		curr->next_instruction++;
+		semaphoreV(&semS);
 		sem_post(&sem);
 	}
 
@@ -729,6 +835,7 @@ void interpreter(BCPitem_t* curr)
 	{
 		sem_wait(&sem);
 		curr->next_instruction++;
+		semaphoreV(&semT);
 		sem_post(&sem);
 	}
 
@@ -740,8 +847,8 @@ void* mainLoop()
 			prev_running = curr_running;
 			curr_running = BCP.head;
 
-			//skip blocked processes
-			while(curr_running && curr_running->status == 'b') 
+			//skip blocked and inactive processes
+			while(curr_running && (curr_running->status == 'b' || curr_running->status == 'i')) 
 				curr_running = curr_running->next;
 
 			if(prev_running != curr_running)
@@ -769,19 +876,18 @@ void* mainLoop()
 		advanceIOqueue();
 		sem_post(&sem);
 		cpuclock++;
-		usleep(100);
+		usleep(200);
 	}
 		
 }
 int main()
 {
 	init_data_structures();
-	sem_init(&sem,0,1);
-//	pthread_mutex_init(&lock,NULL);
 	pthread_t kernel;
 	pthread_t sim_menu;
 	pthread_create(&sim_menu,NULL,menu,NULL);
 	pthread_create(&kernel,NULL,&mainLoop,NULL);
 	pthread_join(kernel,NULL);
 	pthread_join(sim_menu,NULL);
+	
 }
