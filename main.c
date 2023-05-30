@@ -1,8 +1,3 @@
-/*----------------------------------------------------------------------------------
-  					TO-DO
-----------------------------------------------------------------------------------*/
-
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
@@ -22,6 +17,10 @@
 
 #define FILE_EXT ".prog"
 
+//command for cleaning the cli.
+//change to your system's equivalent or remove altogether
+#define CLEAR_SCREEN system("clear");
+
 struct proc;
 struct semaphor;
 struct sem_li;
@@ -29,7 +28,6 @@ struct sem_li;
 long available_memory = MAX_MEM_SIZE;
 
 pthread_mutex_t lock;
-
 
 
 typedef struct memoryPage
@@ -73,7 +71,7 @@ typedef struct bcp_item
 {
 	Process* proc;
 	int next_instruction;
-	char status; //r: ready, R: running, b: blocked 
+	char status; //r: ready, R: running, b: blocked, i:inactive
 	long remaining_time;
 	int PID;
 	struct bcp_item* next;
@@ -109,7 +107,8 @@ typedef struct sem_li
 {
 	BCPitem_t* proc;
 	struct sem_li* next;
-} sem_list_t;
+} sem_list_item_t;
+
 
 
 //Global variables:
@@ -122,7 +121,6 @@ BCPitem_t* prev_running = NULL;
 volatile int PID = 0;
 volatile long cpuclock = 0;
 volatile int stop = 0;
-volatile int proc_switched = 0;
 sem_t sem;
 semaphore_t semS, semT;
 
@@ -168,10 +166,10 @@ void proc_sleep(BCPitem_t* proc)
 }
 
 
-void sem_queue(sem_list_t** list, BCPitem_t* proc)
+//queues processes blocked by a failed call to semaphoreP()
+void sem_queue(sem_list_item_t** list, BCPitem_t* proc)
 {
-	printf("Queued process %d\n",proc->PID);
-	sem_list_t* new = malloc(sizeof(sem_list_t));
+	sem_list_item_t* new = malloc(sizeof(sem_list_item_t));
 	new->next = NULL;
 	new->proc = proc;
 
@@ -180,7 +178,7 @@ void sem_queue(sem_list_t** list, BCPitem_t* proc)
 		*list = new;
 		return;
 	}
-	sem_list_t* aux, *prev = NULL;
+	sem_list_item_t* aux, *prev = NULL;
 	for(aux = *list; aux; prev = aux, aux = aux->next);
 	new->next = aux;
 	if(prev)
@@ -203,6 +201,7 @@ void semaphoreP(semaphore_t* semaph, BCPitem_t* proc)
 		pthread_mutex_unlock(&semaph->mutex_lock);
 }
 
+//releases the lock and wakes up the first waiting process
 void semaphoreV(semaphore_t* semaph)
 {
 	pthread_mutex_lock(&semaph->mutex_lock);
@@ -227,6 +226,7 @@ int inFrameTable(int pos, Process* proc)
 	return 0;
 }
 
+//loads a process' missing pages into memory and sets their virtual addresses
 void memLoadReq(Process* proc)
 {
 	int nFrames = ceil((float)proc->seg_size/PAGE_SIZE);
@@ -295,9 +295,12 @@ void memLoadReq(Process* proc)
 
 }
 
+//adds process to a queue of IO operations
 void io_queue_add(BCPitem_t* item, char type)
 {
 	IOop_t* new = malloc(sizeof(IOop_t));
+
+	//assuming time for operation is the same as arg since it wasn't specified
 	new->remaining_time = item->proc->code[item->next_instruction]->arg;
 	new->process = item;
 	new->type = type;
@@ -353,13 +356,16 @@ void dequeueProcess(BCPitem_t* item)
 
 }
 
+//wakes up a "sleeping" (waiting)  process
 void proc_wakeup(BCPitem_t* proc)
 {
 	proc->status = 'r';
 	dequeueProcess(proc);
 	queueProcess(proc);
 }
-void processInterrupt() // interrupt current process and reschedule it
+
+// interrupt current process and reschedule it
+void processInterrupt() 
 {
 	BCPitem_t* curr = curr_running;
 	if(curr)
@@ -370,6 +376,8 @@ void processInterrupt() // interrupt current process and reschedule it
 		queueProcess(curr);
 	}
 }
+
+//advances the queue of IO operations by a single unit of time
 void advanceIOqueue()
 {
 	IOop_t* aux = IOqueue.head;
@@ -383,7 +391,9 @@ void advanceIOqueue()
 			aux->process->next_instruction++;
 			IOqueue.head = IOqueue.head->next;
 
+			//reschedule the currently running process
 			processInterrupt();
+
 			//reschedule the now unblocked process
 			dequeueProcess(aux->process);
 			queueProcess(aux->process);
@@ -393,6 +403,7 @@ void advanceIOqueue()
 	}
 }
 
+//properly frees the contents of a BCP register
 void Free(BCPitem_t* a)
 {
 	sem_wait(&sem);
@@ -402,6 +413,7 @@ void Free(BCPitem_t* a)
 	free(a);
 	sem_post(&sem);
 }
+
 int validateFilename(char* filename)
 {
 	int i;
@@ -416,6 +428,7 @@ int validateFilename(char* filename)
 	return 0;
 }
 
+//translate the program's code to an array of instructions
 command_t** parsecommands(char* code, int* inst_counter)
 {
 	char temp[100];
@@ -432,6 +445,8 @@ command_t** parsecommands(char* code, int* inst_counter)
 
 	count = 0;
 	int j;
+
+	//break the code into lines
 	sem_wait(&sem);
 	i = 0;
 	while(code[i] != '\0')
@@ -451,6 +466,7 @@ command_t** parsecommands(char* code, int* inst_counter)
 	}
 	sem_post(&sem);
 
+	//break each line into a pair of call and arg
 	char* arg = NULL;
 	for(i = 0; i < count; i++)
 	{
@@ -465,6 +481,7 @@ command_t** parsecommands(char* code, int* inst_counter)
 	return cmd;
 
 }
+
 //make sure to check for NULL returns whenever this function is called
 Process* readProgramfromDisk(char* filename)
 {
@@ -495,7 +512,7 @@ Process* readProgramfromDisk(char* filename)
 	fscanf(file,"%d\n",&proc->SID);
 	fscanf(file,"%d\n",&proc->priority);
 	fscanf(file,"%d\n",&proc->seg_size);
-	proc->seg_size*=1024;
+	proc->seg_size*=1024; //convert kbytes to bytes
 
 	//initialize page table
 	proc->pTable = malloc(sizeof(pageTable_t));
@@ -516,6 +533,7 @@ Process* readProgramfromDisk(char* filename)
 			num_of_semaphores++;
 	}
 
+	//allocate space for a list of used semaphores
 	proc->used_semaphores = malloc(num_of_semaphores+1); //+1 for a null terminator
 	fseek(file,sem_start_pos,SEEK_SET);
 	i = 0;
@@ -563,27 +581,11 @@ void printProcessInfo(Process* proc)
 	for(int i = 0; proc->used_semaphores[i] != '\0'; i++)
 		printf("%c ",proc->used_semaphores[i]);
 	printf("\n\n");
-	printf("Page table:\n");
-	for(int i = 0; i < ceil((float)proc->seg_size/PAGE_SIZE); i++)
-		printf("[%d] address: %ld\n",i,proc->pTable->address[i]);
+//	printf("Page table:\n");
+//	for(int i = 0; i < ceil((float)proc->seg_size/PAGE_SIZE); i++)
+//		printf("[%d] address: %ld\n",i,proc->pTable->address[i]);
 }
 
-//checks if the requested virtual address is already in memory
-//apparently won't be used, since the only memory transaction that will be done is that of loading a process into memory (once).
-int pageFault(Process* proc, long virt_addr)
-{
-	long numPages = ceil(proc->seg_size/PAGE_SIZE);
-	if(virt_addr > numPages)
-	{
-		printf("Segmentation fault\n");
-		exit(1);
-	}
-	if(proc->pTable->address[virt_addr] == -1) //requested page is in disk
-		return 1;
-	return 0;
-}
-
-//loads a process into memory and sets its virtual adresses
 int isDigit(char c)
 {
 	if(c >= '0' && c <= '9')
@@ -603,6 +605,7 @@ long calculateRemainingTime(Process* proc)
 
 }
 
+//creates a process from information in a file and schedules it
 void processCreate(char* filename)
 {
 	//create a bcp register of said process
@@ -660,14 +663,6 @@ void processFinish(BCPitem_t* proc)
 	Free(proc);
 }
 
-void showList()
-{
-	BCPitem_t* head = BCP.head;
-	for(;head;head = head->next)
-		printf("%d ",head->remaining_time);
-	printf("\n");
-}
-
 char* getStatus(char st)
 {
 	if(st == 'r')
@@ -680,9 +675,11 @@ char* getStatus(char st)
 		return "Inactive";
 	return "Unknown";
 }
+
 void viewProcessInfo()
 {
 	sem_wait(&sem);
+	CLEAR_SCREEN
 	if(BCP.head == NULL)
 	{
 		printf("No processes currently scheduled!\n");
@@ -704,8 +701,10 @@ void viewProcessInfo()
 		if(aux->PID == search_pid)
 		{
 			printf("\n\n");
+			CLEAR_SCREEN
 			printProcessInfo(aux->proc);
-			printf("next instruction: %d\n",aux->next_instruction);
+			printf("Current instruction: %s\n",aux->proc->code[aux->next_instruction]->call);
+			printf("Status: %s\n", getStatus(aux->status));
 			printf("Remaining time: %ld\n",aux->remaining_time);
 			found = 1;
 			break;
@@ -718,35 +717,52 @@ void viewProcessInfo()
 	return;
 }
 
-void count_used_frames()
+void showMenu()
 {
-	int count = 0;
-	for(int i = 0; i < NUMBER_OF_FRAMES; i++) 
-		if(frameTable.frame[i])
-			count++;
-	printf("number of frames currently used: %d\n",count);
+	sleep(1);
+	CLEAR_SCREEN
+	printf("┌──────────────────────────────────────┐\n");
+	printf("│       Operating System Simulator     │\n");
+	printf("└──────────────────────────────────────┘\n");
 
+	printf("┌──────────────────────────────────────┐\n");
+	printf("│                Menu:                 │\n");
+	printf("├──────────────────────────────────────┤\n");
+	printf("│ [1] Create process                   │\n");
+	printf("│ [2] View process info                │\n");
+	printf("│ [0] Quit                             │\n");
+	printf("└──────────────────────────────────────┘\n");
+	printf("  Currently running: ");
+	if(curr_running)
+	{
+		printf("%s (%d)\n",curr_running->proc->name,curr_running->PID);
+	}
+	else
+		printf("nothing\n");
+	printf("\n  Option: \n");
 }
 
 void* menu()
 {
-//	for(int i = 0; i < 20; i++)
-//		processCreate("synthetic_2.prog");
+	for(int i = 0; i < 20; i++)
+		processCreate("synthetic_2.prog");
 	int opt;
 	char filename[128];
 	do{
-
-		printf("\nMenu:\n-----------------------------------------------\n[1] Create process\n[2] View process info\n[0] Quit\n");
-		printf("\nOption: ");
-		scanf("%d",&opt);
+		sem_wait(&sem);
+		showMenu();
+		sem_post(&sem);
+		scanf(" %d",&opt);
 		switch(opt)
 		{
 			case 0: 
 				stop = 1;
 				break;
 			case 1:
+				sem_wait(&sem);
 				printf("Program filename: ");
 				scanf(" %[^\n]",filename);
+				sem_post(&sem);
 				processCreate(filename);
 				break;
 			case 2:
@@ -761,7 +777,8 @@ void* menu()
 }
 
 
-
+//does all of the interpreting of the code
+//runs every unit of time
 void interpreter(BCPitem_t* curr)
 {
 	Process* proc = curr->proc;
@@ -853,7 +870,9 @@ void* mainLoop()
 
 			if(prev_running != curr_running)
 			{
-				proc_switched = 1;
+				sem_wait(&sem);
+				showMenu();
+				sem_post(&sem);
 				if(curr_running)
 				{
 					//load process' missing pages into memory
@@ -876,7 +895,7 @@ void* mainLoop()
 		advanceIOqueue();
 		sem_post(&sem);
 		cpuclock++;
-		usleep(200);
+		usleep(200); //arbitrarily chosen time period the advance each unit of time
 	}
 		
 }
