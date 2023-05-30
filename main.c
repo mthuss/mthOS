@@ -500,6 +500,7 @@ Process* readProgramfromDisk(char* filename)
 	if(!validateFilename(filename))
 	{
 		printf("Invalid filename!! Only " FILE_EXT " files allowed!\n");
+		sleep(2);
 		return NULL;
 	}
 
@@ -508,6 +509,7 @@ Process* readProgramfromDisk(char* filename)
 	if(!file)
 	{
 		printf("Requested file does not exist!\n");
+		sleep(2);
 		return NULL;
 	}
 
@@ -630,6 +632,7 @@ void processCreate(char* filename)
 	if(!new->proc)
 	{
 		printf("Error retrieving program from disk\n");
+		sleep(2);
 		return;
 	}
 	long size = new->proc->seg_size;
