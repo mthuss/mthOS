@@ -21,15 +21,14 @@
 //change to your system's equivalent or remove altogether
 #define CLEAR_SCREEN system("clear");
 
+//struct prototypes that were required for declarations further down
 struct proc;
 struct semaphor;
 struct sem_li;
 
-long available_memory = MAX_MEM_SIZE;
 
-pthread_mutex_t lock;
-
-
+//Data types:
+//------------------------------------------------------------------------------
 typedef struct memoryPage
 {
 	//char data[PAGE_SIZE]; //doesn't actually need to store any data
@@ -113,6 +112,7 @@ typedef struct sem_li
 
 //Global variables:
 //------------------------------------------------------------------------------
+long available_memory = MAX_MEM_SIZE;
 frameTable_t  frameTable;
 BCP_t BCP;
 IOqueue_t IOqueue;
@@ -123,6 +123,7 @@ volatile long cpuclock = 0;
 volatile int stop = 0;
 sem_t sem;
 semaphore_t semS, semT;
+pthread_mutex_t lock;
 
 //Functions:
 //------------------------------------------------------------------------------
@@ -188,6 +189,7 @@ void sem_queue(sem_list_item_t** list, BCPitem_t* proc)
 
 		
 }
+
 //takes the semaphore and the process that requested it
 void semaphoreP(semaphore_t* semaph, BCPitem_t* proc)
 {
@@ -407,6 +409,16 @@ void advanceIOqueue()
 void Free(BCPitem_t* a)
 {
 	sem_wait(&sem);
+	long* address = a->proc->pTable->address;
+	int nFrames = ceil((float)a->proc->seg_size/PAGE_SIZE);
+	for(int i = 0; i < nFrames; i++) //free the virtual memory
+	{
+		if(address[i] != -1)
+		{
+			frameTable.frame[address[i]] = NULL;
+			available_memory += PAGE_SIZE;
+		}
+	}
 	free(a->proc->pTable);
 	free(a->proc->code);
 	free(a->proc);
@@ -581,6 +593,7 @@ void printProcessInfo(Process* proc)
 	for(int i = 0; proc->used_semaphores[i] != '\0'; i++)
 		printf("%c ",proc->used_semaphores[i]);
 	printf("\n\n");
+
 //	printf("Page table:\n");
 //	for(int i = 0; i < ceil((float)proc->seg_size/PAGE_SIZE); i++)
 //		printf("[%d] address: %ld\n",i,proc->pTable->address[i]);
@@ -650,16 +663,6 @@ void processCreate(char* filename)
 void processFinish(BCPitem_t* proc)
 {
 	dequeueProcess(proc);
-	long* address = proc->proc->pTable->address;
-	int nFrames = ceil((float)proc->proc->seg_size/PAGE_SIZE);
-	for(int i = 0; i < nFrames; i++) //free the virtual memory
-	{
-		if(address[i] != -1)
-		{
-			frameTable.frame[address[i]] = NULL;
-			available_memory += PAGE_SIZE;
-		}
-	}
 	Free(proc);
 }
 
@@ -703,7 +706,7 @@ void viewProcessInfo()
 			printf("\n\n");
 			CLEAR_SCREEN
 			printProcessInfo(aux->proc);
-			printf("Current instruction: %s\n",aux->proc->code[aux->next_instruction]->call);
+			printf("Current instruction: %s (%d)\n",aux->proc->code[aux->next_instruction]->call,aux->next_instruction);
 			printf("Status: %s\n", getStatus(aux->status));
 			printf("Remaining time: %ld\n",aux->remaining_time);
 			found = 1;
@@ -744,8 +747,6 @@ void showMenu()
 
 void* menu()
 {
-	for(int i = 0; i < 20; i++)
-		processCreate("synthetic_2.prog");
 	int opt;
 	char filename[128];
 	do{
@@ -778,7 +779,7 @@ void* menu()
 
 
 //does all of the interpreting of the code
-//runs every unit of time
+//runs every unit of time when there's a Running process
 void interpreter(BCPitem_t* curr)
 {
 	Process* proc = curr->proc;
@@ -895,7 +896,7 @@ void* mainLoop()
 		advanceIOqueue();
 		sem_post(&sem);
 		cpuclock++;
-		usleep(200); //arbitrarily chosen time period the advance each unit of time
+		usleep(100); //arbitrarily chosen time period to advance each unit of time
 	}
 		
 }
