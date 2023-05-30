@@ -722,7 +722,6 @@ void viewProcessInfo()
 
 void showMenu()
 {
-	sleep(1);
 	CLEAR_SCREEN
 	printf("┌──────────────────────────────────────┐\n");
 	printf("│       Operating System Simulator     │\n");
