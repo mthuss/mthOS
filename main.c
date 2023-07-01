@@ -127,10 +127,8 @@ IOqueue_t IOqueue;
 BCPitem_t* curr_running = NULL;
 BCPitem_t* prev_running = NULL;
 volatile int PID = 0;
-volatile long cpuclock = 0;
 volatile int stop = 0;
 sem_t sem;
-semaphore_t semS, semT;
 pthread_mutex_t lock;
 all_sem_list_t existing_semaphores;
 
@@ -157,10 +155,6 @@ void init_data_structures()
 
 	//mutex lock for simulating semaphores
 	pthread_mutex_init(&lock,NULL);
-
-	//initialize simulated semaphores
-	semaphore_init(&semS,1);
-	semaphore_init(&semT,1);
 }
 
 
@@ -234,7 +228,7 @@ void createSemaphore(char name)
 	new->next = NULL;
 	new->name = name;
 	new->refcount = 1;
-	semaphore_init(new, 1);
+	semaphore_init(new, 0);
 	insert_semaphore(new);
 }
 
@@ -1023,7 +1017,6 @@ void* mainLoop()
 		sem_wait(&sem);
 		advanceIOqueue();
 		sem_post(&sem);
-		cpuclock++;
 		usleep(300); //arbitrarily chosen time period to advance each unit of time
 	}
 		
