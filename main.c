@@ -194,13 +194,13 @@ void sem_queue(sem_list_item_t** list, BCPitem_t* proc)
 void semaphoreP(semaphore_t* semaph, BCPitem_t* proc)
 {
 	pthread_mutex_lock(&semaph->mutex_lock);
-	semaph->v--;
 	if(semaph->v < 0)
 	{
 		sem_queue(&semaph->waiting_list,proc);
 		proc_sleep(proc);
 	}
 		pthread_mutex_unlock(&semaph->mutex_lock);
+	semaph->v--;
 }
 
 //releases the lock and wakes up the first waiting process
@@ -689,6 +689,7 @@ void viewProcessInfo()
 	if(BCP.head == NULL)
 	{
 		printf("No processes currently scheduled!\n");
+		sleep(3);
 		sem_post(&sem);
 		return;
 	}
@@ -717,8 +718,7 @@ void viewProcessInfo()
 		}
 	if(!found)
 		printf("Invalid PID! Process not found.\n");
-	else
-		sleep(3);
+	sleep(3);
 	sem_post(&sem);
 	return;
 }
