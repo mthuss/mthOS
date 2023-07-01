@@ -129,6 +129,7 @@ pthread_mutex_t lock;
 //------------------------------------------------------------------------------
 void semaphore_init(semaphore_t* semaph, volatile int v);
 void proc_wakeup(BCPitem_t* proc);
+void processFinish(BCPitem_t* proc);
 
 void init_data_structures()
 {
@@ -210,9 +211,12 @@ void semaphoreV(semaphore_t* semaph)
 	semaph->v++;
 	if(semaph->v <= 0)
 	{
-		BCPitem_t* proc = semaph->waiting_list->proc;
-		semaph->waiting_list = semaph->waiting_list->next;
-		proc_wakeup(proc);
+		if(semaph->waiting_list)
+		{
+			BCPitem_t* proc = semaph->waiting_list->proc;
+			semaph->waiting_list = semaph->waiting_list->next;
+			proc_wakeup(proc);
+		}
 	}
 	pthread_mutex_unlock(&semaph->mutex_lock);
 }
@@ -238,9 +242,6 @@ void memLoadReq(Process* proc)
 	memPage* newPage = NULL;
 	long* associated_page;
 	
-	for(i = 0; i < nFrames; i++)
-		missing++;
-		
 	for(i = 0; i < nFrames; i++)
 		if(address[i] == -1) //not in main memory
 		{
@@ -387,10 +388,16 @@ void advanceIOqueue()
 	{
 		aux->remaining_time--;
 		aux->process->remaining_time--;
-		if(aux->remaining_time == 0) //IO operation finished
+		if(aux->remaining_time <= 0) //IO operation finished
 		{
 			aux->process->status = 'r';
 			aux->process->next_instruction++;
+			if(aux->process->next_instruction >= aux->process->proc->nCommands)
+			{
+				IOqueue.head = IOqueue.head->next;
+				processFinish(aux->process);
+				return;
+			}
 			IOqueue.head = IOqueue.head->next;
 
 			//reschedule the currently running process
@@ -408,7 +415,6 @@ void advanceIOqueue()
 //properly frees the contents of a BCP register
 void Free(BCPitem_t* a)
 {
-	sem_wait(&sem);
 	long* address = a->proc->pTable->address;
 	int nFrames = ceil((float)a->proc->seg_size/PAGE_SIZE);
 	for(int i = 0; i < nFrames; i++) //free the virtual memory
@@ -423,7 +429,6 @@ void Free(BCPitem_t* a)
 	free(a->proc->code);
 	free(a->proc);
 	free(a);
-	sem_post(&sem);
 }
 
 int validateFilename(char* filename)
@@ -891,14 +896,16 @@ void* mainLoop()
 			interpreter(curr_running);
 			if(curr_running != NULL && curr_running->next_instruction >= curr_running->proc->nCommands)
 			{
+				sem_wait(&sem);
 				processFinish(curr_running);
+				sem_post(&sem);
 			}
 		}
 		sem_wait(&sem);
 		advanceIOqueue();
 		sem_post(&sem);
 		cpuclock++;
-		usleep(100); //arbitrarily chosen time period to advance each unit of time
+		usleep(300); //arbitrarily chosen time period to advance each unit of time
 	}
 		
 }
