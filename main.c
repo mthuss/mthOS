@@ -98,7 +98,10 @@ typedef struct semaphor
 {
 	pthread_mutex_t mutex_lock;
 	volatile int v; //semaphore's value
+	char name;
+	int refcount; //counts the number of processes that use the semaphore in question 
 	struct sem_li* waiting_list; //head of a semaphore's waiting list
+	struct semaphor* next;
 
 } semaphore_t;
 
@@ -107,6 +110,11 @@ typedef struct sem_li
 	BCPitem_t* proc;
 	struct sem_li* next;
 } sem_list_item_t;
+
+typedef struct all_sem_li
+{
+	semaphore_t* head;
+} all_sem_list_t;
 
 
 
@@ -124,6 +132,7 @@ volatile int stop = 0;
 sem_t sem;
 semaphore_t semS, semT;
 pthread_mutex_t lock;
+all_sem_list_t existing_semaphores;
 
 //Functions:
 //------------------------------------------------------------------------------
@@ -154,6 +163,7 @@ void init_data_structures()
 	semaphore_init(&semT,1);
 }
 
+
 void semaphore_init(semaphore_t* semaph, volatile int v)
 {
 	pthread_mutex_init(&semaph->mutex_lock,NULL);
@@ -167,8 +177,44 @@ void proc_sleep(BCPitem_t* proc)
 	return;
 }
 
+//inserts a semaphore into the global list of all existing semaphores
+void insert_semaphore(semaphore_t* item)
+{
+	if(existing_semaphores.head == NULL)
+	{
+		existing_semaphores.head = item;
+		return;
+	}
+	semaphore_t* aux, *prev = NULL;
+	for(aux = existing_semaphores.head; aux; prev = aux, aux = aux->next)
+	{
+		//semaphore by this name already exists
+		if(item->name == aux->name)
+		{
+			aux->refcount++;
+			free(item);
+			return;
+		}
+	}
+	item->next = aux;
+	if(prev)
+		prev->next = item;
+	else
+		existing_semaphores.head = item;
+}
 
-//queues processes blocked by a failed call to semaphoreP()
+//creates semaphore with given name and adds it to the list of all semaphores
+void createSemaphore(char name)
+{
+	semaphore_t* new = malloc(sizeof(semaphore_t));
+	new->next = NULL;
+	new->name = name;
+	new->refcount = 1;
+	semaphore_init(new, 1);
+	insert_semaphore(new);
+}
+
+//queues PROCESSES blocked by a failed call to semaphoreP()
 void sem_queue(sem_list_item_t** list, BCPitem_t* proc)
 {
 	sem_list_item_t* new = malloc(sizeof(sem_list_item_t));
@@ -392,10 +438,13 @@ void advanceIOqueue()
 		{
 			aux->process->status = 'r';
 			aux->process->next_instruction++;
+
+			//this IO op was the last instruction of the program
 			if(aux->process->next_instruction >= aux->process->proc->nCommands)
 			{
 				IOqueue.head = IOqueue.head->next;
 				processFinish(aux->process);
+				showMenu();
 				return;
 			}
 			IOqueue.head = IOqueue.head->next;
@@ -412,12 +461,61 @@ void advanceIOqueue()
 	}
 }
 
+//retrieve a semaphore object given its name
+semaphore_t* retrieveSemaphore(char name)
+{
+	semaphore_t* aux = existing_semaphores.head;
+	while(aux)
+	{
+		if(aux->name == name)
+			return aux;
+		aux = aux->next;
+	}
+	printf("something went really wrong !!!!\n");
+	sleep(1);
+	return NULL;
+}
+
+void removeSemaphore(semaphore_t* item)
+{
+	semaphore_t* aux = existing_semaphores.head, *prev = NULL;
+	for(; aux && aux != item; prev = aux, aux = aux->next);
+	if(aux)
+	{
+		if(prev)
+			prev->next = aux->next;
+		else //aux is the current head
+			existing_semaphores.head = existing_semaphores.head->next;
+		free(aux);
+	}
+}
 //properly frees the contents of a BCP register
 void Free(BCPitem_t* a)
 {
+	int i = 0;
+
+	//decrement reference count on all of the process' used semaphores
+	semaphore_t* aux;
+	while(a->proc->used_semaphores[i] != '\0')
+	{
+		aux = existing_semaphores.head;
+		while(aux)
+		{
+			if(aux->name == a->proc->used_semaphores[i])
+			{
+				aux->refcount--;
+				if(aux->refcount <= 0) //no processes using this semaphore anymore
+					removeSemaphore(aux);
+				break;
+			}
+			aux = aux->next;
+		}
+		i++;
+	}
+
 	long* address = a->proc->pTable->address;
 	int nFrames = ceil((float)a->proc->seg_size/PAGE_SIZE);
-	for(int i = 0; i < nFrames; i++) //free the virtual memory
+	for(i = 0; i < nFrames; i++) //free the virtual memory
 	{
 		if(address[i] != -1)
 		{
@@ -568,6 +666,12 @@ Process* readProgramfromDisk(char* filename)
 		}
 	}
 	proc->used_semaphores[num_of_semaphores] = '\0';
+
+	//create the respective semaphores
+	for(int num = 0; num < num_of_semaphores; num++)
+	{
+		createSemaphore(proc->used_semaphores[num]);
+	}
 	
 
 	char* code = malloc(filesize - ftell(file) + 1); //+1 for a null terminator
@@ -752,6 +856,26 @@ void showMenu()
 	printf("\n  Option: \n");
 }
 
+void showSemaphoreList()
+{
+	sem_wait(&sem);
+	printf("List of currently existing semaphores:\n");
+	semaphore_t* aux = existing_semaphores.head;
+	if(!aux)
+	{
+		printf("None!!\n");
+		sleep(3);
+		sem_post(&sem);
+		return;
+	}
+	while(aux)
+	{
+		printf("%c | Refcount: %d\n",aux->name,aux->refcount);
+		aux = aux->next;
+	}
+	sleep(3);
+	sem_post(&sem);
+}
 void* menu()
 {
 	int opt;
@@ -775,6 +899,10 @@ void* menu()
 				break;
 			case 2:
 				viewProcessInfo();
+				break;
+
+			case 3:
+				showSemaphoreList();
 				break;
 			default: 
 				printf("Invalid option!\n");
