@@ -171,6 +171,30 @@ void semaphore_init(semaphore_t* semaph, volatile int v)
 	semaph->v = v;
 }
 
+void showMenu()
+{
+	CLEAR_SCREEN
+	printf("┌──────────────────────────────────────┐\n");
+	printf("│       Operating System Simulator     │\n");
+	printf("└──────────────────────────────────────┘\n");
+
+	printf("┌──────────────────────────────────────┐\n");
+	printf("│                Menu:                 │\n");
+	printf("├──────────────────────────────────────┤\n");
+	printf("│ [1] Create process                   │\n");
+	printf("│ [2] View process info                │\n");
+	printf("│ [0] Quit                             │\n");
+	printf("└──────────────────────────────────────┘\n");
+	printf("  Currently running: ");
+	if(curr_running)
+	{
+		printf("%s (%d)\n",curr_running->proc->name,curr_running->PID);
+	}
+	else
+		printf("nothing\n");
+	printf("\n  Option: \n");
+}
+
 void proc_sleep(BCPitem_t* proc)
 {
 	proc->status = 'i';
@@ -590,7 +614,7 @@ command_t** parsecommands(char* code, int* inst_counter)
 		arg = strtok(NULL," ");
 		if(arg)
 			cmd[i]->arg = (int)strtol(arg,NULL,10);
-		else
+		else //command is a P() or a V()
 			cmd[i]->arg = -1;
 	}
 	return cmd;
@@ -832,29 +856,6 @@ void viewProcessInfo()
 	return;
 }
 
-void showMenu()
-{
-	CLEAR_SCREEN
-	printf("┌──────────────────────────────────────┐\n");
-	printf("│       Operating System Simulator     │\n");
-	printf("└──────────────────────────────────────┘\n");
-
-	printf("┌──────────────────────────────────────┐\n");
-	printf("│                Menu:                 │\n");
-	printf("├──────────────────────────────────────┤\n");
-	printf("│ [1] Create process                   │\n");
-	printf("│ [2] View process info                │\n");
-	printf("│ [0] Quit                             │\n");
-	printf("└──────────────────────────────────────┘\n");
-	printf("  Currently running: ");
-	if(curr_running)
-	{
-		printf("%s (%d)\n",curr_running->proc->name,curr_running->PID);
-	}
-	else
-		printf("nothing\n");
-	printf("\n  Option: \n");
-}
 
 void showSemaphoreList()
 {
@@ -920,7 +921,7 @@ void interpreter(BCPitem_t* curr)
 	Process* proc = curr->proc;
 	command_t* instruction = proc->code[curr->next_instruction];
 
-	if(strcmp(instruction->call,"exec") == 0)
+	if(instruction->call[0] == 'e') //exec
 	{
 		sem_wait(&sem);
 		instruction->arg--;
@@ -933,7 +934,8 @@ void interpreter(BCPitem_t* curr)
 		sem_post(&sem);
 		return;
 	}
-	if(strcmp(instruction->call,"read") == 0)
+
+	if(instruction->call[0] == 'r') //read
 	{
 		sem_wait(&sem);
 		curr_running = NULL;
@@ -942,7 +944,7 @@ void interpreter(BCPitem_t* curr)
 		sem_post(&sem);
 	}
 
-	if(strcmp(instruction->call,"write") == 0)
+	if(instruction->call[0] == 'w') //write
 	{
 		sem_wait(&sem);
 		curr_running = NULL;
@@ -951,7 +953,8 @@ void interpreter(BCPitem_t* curr)
 		sem_post(&sem);
 
 	}
-	if(strcmp(instruction->call,"print") == 0)
+
+	if(instruction->call[0] == 'p') //print
 	{
 		sem_wait(&sem);
 		curr_running = NULL;
@@ -960,38 +963,26 @@ void interpreter(BCPitem_t* curr)
 		sem_post(&sem);
 
 	}
-	if(strcmp(instruction->call,"P(s)") == 0)
+
+	if(instruction->call[0] == 'P') //P(sem)
 	{
 		sem_wait(&sem);
+		//name of the semaphore is on position 2 given that it is on the format P(s)
+		semaphore_t* argSem = retrieveSemaphore(instruction->call[2]);
 		curr->next_instruction++;
-		semaphoreP(&semS,curr);
+		semaphoreP(argSem,curr);
 		sem_post(&sem);
 	}
 
-	if(strcmp(instruction->call,"P(t)") == 0)
+	if(instruction->call[0] == 'V') //V(sem)
 	{
 		sem_wait(&sem);
+		//name of the semaphore is on position 2 given that it is on the format P(s)
+		semaphore_t* argSem = retrieveSemaphore(instruction->call[2]);
 		curr->next_instruction++;
-		semaphoreP(&semT,curr);
+		semaphoreV(argSem);
 		sem_post(&sem);
 	}
-
-	if(strcmp(instruction->call,"V(s)") == 0)
-	{
-		sem_wait(&sem);
-		curr->next_instruction++;
-		semaphoreV(&semS);
-		sem_post(&sem);
-	}
-
-	if(strcmp(instruction->call,"V(t)") == 0)
-	{
-		sem_wait(&sem);
-		curr->next_instruction++;
-		semaphoreV(&semT);
-		sem_post(&sem);
-	}
-
 }
 void* mainLoop()
 {
