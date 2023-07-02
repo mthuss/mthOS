@@ -561,6 +561,19 @@ int validateFilename(char* filename)
 	return 0;
 }
 
+int validateFileFormatting(FILE* file)
+{
+	char curr, prev;
+	while(1)
+	{
+		if(curr == EOF)
+		{
+			if(prev == '\n')
+				return 1;
+		}
+	}
+}
+
 //translate the program's code to an array of instructions
 command_t** parsecommands(char* code, int* inst_counter)
 {
@@ -568,7 +581,7 @@ command_t** parsecommands(char* code, int* inst_counter)
 	int i;
 	int count = 0;
 	for(i = 0; code[i] != '\0'; i++)
-		if(code[i] == '\n' || code[i] == '\0')
+		if(code[i] == '\n' && code[i+1] != '\n')
 			count++;
 	*inst_counter = count;
 
@@ -584,6 +597,12 @@ command_t** parsecommands(char* code, int* inst_counter)
 	i = 0;
 	while(code[i] != '\0')
 	{
+		while(code[i] == '\n' && code[i] != '\0') //in case there are more than two newlines at the end of the file
+			i++;
+
+		if(code[i] == '\0')
+			break;
+
 		for(j = 0; code[i] != '\n'; i++, j++)
 		{
 			temp[j] = code[i];
@@ -626,6 +645,13 @@ Process* readProgramfromDisk(char* filename)
 	}
 
 	FILE* file = fopen(filename,"r");
+
+//	if(!validateFileFormatting(file))
+//	{
+//		printf("The input file is not properly formatted!!\nSee the readme file for info on proper formatting.\n");
+//		sleep(3);
+//		return NULL;
+//	}
 
 	if(!file)
 	{
