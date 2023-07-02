@@ -6,7 +6,7 @@
 #include <pthread.h>
 #include <semaphore.h>
 
-//1GB de memória
+//1GB of memory
 #define MAX_MEM_SIZE 1074000000
 //#define MAX_MEM_SIZE 6 * PAGE_SIZE
 
@@ -100,18 +100,18 @@ typedef struct semaphor
 	volatile int v; //semaphore's value
 	char name;
 	int refcount; //counts the number of processes that use the semaphore in question 
-	struct sem_li* waiting_list; //head of a semaphore's waiting list
+	struct sem_li* waiting_list; //head of a semaphore's waiting process list
 	struct semaphor* next;
 
 } semaphore_t;
 
-typedef struct sem_li
+typedef struct sem_li //list of processes waiting on a given semaphore
 {
 	BCPitem_t* proc;
 	struct sem_li* next;
 } sem_list_item_t;
 
-typedef struct all_sem_li
+typedef struct all_sem_li //list of all existing semaphores
 {
 	semaphore_t* head;
 } all_sem_list_t;
@@ -121,7 +121,7 @@ typedef struct all_sem_li
 //Global variables:
 //------------------------------------------------------------------------------
 long available_memory = MAX_MEM_SIZE;
-frameTable_t  frameTable;
+frameTable_t frameTable;
 BCP_t BCP;
 IOqueue_t IOqueue;
 BCPitem_t* curr_running = NULL;
@@ -129,7 +129,6 @@ BCPitem_t* prev_running = NULL;
 volatile int PID = 0;
 volatile int stop = 0;
 sem_t sem;
-pthread_mutex_t lock;
 all_sem_list_t existing_semaphores;
 
 //Functions:
@@ -152,9 +151,6 @@ void init_data_structures()
 
 	//mutex semaphore
 	sem_init(&sem,0,1);
-
-	//mutex lock for simulating semaphores
-	pthread_mutex_init(&lock,NULL);
 }
 
 
@@ -570,6 +566,10 @@ command_t** parsecommands(char* code, int* inst_counter)
 	for(i = 0; code[i] != '\0'; i++)
 		if(code[i] == '\n' && code[i+1] != '\n')
 			count++;
+
+	if(code[i-1] != '\n') //file has no trailing newline
+		count++;
+
 	*inst_counter = count;
 
 	char** lines = malloc(count*sizeof(char*));
@@ -590,7 +590,7 @@ command_t** parsecommands(char* code, int* inst_counter)
 		if(code[i] == '\0')
 			break;
 
-		for(j = 0; code[i] != '\n'; i++, j++)
+		for(j = 0; code[i] != '\n' && code[i] != '\0'; i++, j++)
 		{
 			temp[j] = code[i];
 		}
@@ -860,6 +860,7 @@ void viewProcessInfo()
 void showSemaphoreList()
 {
 	sem_wait(&sem);
+	CLEAR_SCREEN
 	printf("List of currently existing semaphores:\n");
 	semaphore_t* aux = existing_semaphores.head;
 	if(!aux)
