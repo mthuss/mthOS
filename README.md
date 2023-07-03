@@ -1,7 +1,7 @@
 # rothOS
  The **ro**drigo and m**th**us **O**perating **S**ystem:
 
-An Operating System kernel simulation written in C
+An Operating System simulator written in C
 
 <br>
 
