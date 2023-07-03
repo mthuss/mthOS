@@ -7,8 +7,8 @@
 #include <semaphore.h>
 
 //1GB of memory
-#define MAX_MEM_SIZE 1074000000
-//#define MAX_MEM_SIZE 6 * PAGE_SIZE
+//#define MAX_MEM_SIZE 1074000000
+#define MAX_MEM_SIZE 6 * PAGE_SIZE
 
 //8kbytes
 #define PAGE_SIZE 8192
@@ -173,6 +173,8 @@ void showMenu()
 	printf("├──────────────────────────────────────┤\n");
 	printf("│ [1] Create process                   │\n");
 	printf("│ [2] View process info                │\n");
+	printf("│ [3] View semaphore info              │\n");
+	printf("│ [4] View memory info                 │\n");
 	printf("│ [0] Quit                             │\n");
 	printf("└──────────────────────────────────────┘\n");
 	printf("  Currently running: ");
@@ -302,6 +304,9 @@ void memLoadReq(Process* proc)
 	memPage* newPage = NULL;
 	long* associated_page;
 	
+	for(i = 0; i < nFrames; i++)
+		missing++;
+
 	for(i = 0; i < nFrames; i++)
 		if(address[i] == -1) //not in main memory
 		{
@@ -872,7 +877,15 @@ void viewProcessInfo()
 	return;
 }
 
-
+void showMemoryInfo()
+{
+	sem_wait(&sem);
+	CLEAR_SCREEN
+	printf("Memory used: %d / %d ",MAX_MEM_SIZE - available_memory, MAX_MEM_SIZE);
+	printf("(%.1f\%)\n",(100*(MAX_MEM_SIZE - available_memory)/(float)(MAX_MEM_SIZE)));
+	sleep(3);
+	sem_post(&sem);
+}
 void showSemaphoreList()
 {
 	sem_wait(&sem);
@@ -921,6 +934,9 @@ void* menu()
 
 			case 3:
 				showSemaphoreList();
+				break;
+
+			case 4: showMemoryInfo();
 				break;
 			default: 
 				printf("Invalid option!\n");
