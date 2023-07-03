@@ -7,8 +7,8 @@
 #include <semaphore.h>
 
 //1GB of memory
-//#define MAX_MEM_SIZE 1074000000
-#define MAX_MEM_SIZE 6 * PAGE_SIZE
+#define MAX_MEM_SIZE 1074000000
+//#define MAX_MEM_SIZE 6 * PAGE_SIZE
 
 //8kbytes
 #define PAGE_SIZE 8192
