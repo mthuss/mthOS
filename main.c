@@ -56,7 +56,7 @@ typedef struct cmd{
 typedef struct proc
 {
 	char name[17]; //limited to 16 bytes
-	int SID; //Segment ID
+	int SID; //Segment ID (not used)
 	int priority; //won't actually be used
 	int seg_size; //in bytes
 	char* used_semaphores; //list of semaphores, separated by spaces
@@ -84,7 +84,7 @@ typedef struct bcp
 typedef struct ioop
 {
 	BCPitem_t* process; //stores a pointer to the blocked process
-	char type; //r: read, w: write, p: print, i: inactive
+	char type; //r: read, w: write, p: print
 	int remaining_time;
 	struct ioop* next;
 }IOop_t;
@@ -625,12 +625,15 @@ command_t** parsecommands(char* code, int* inst_counter)
 //make sure to check for NULL returns whenever this function is called
 Process* readProgramfromDisk(char* filename)
 {
+
+	/* Use this to limit program files to using a specific extension
 	if(!validateFilename(filename))
 	{
 		printf("Invalid filename!! Only " FILE_EXT " files allowed!\n");
 		sleep(2);
 		return NULL;
 	}
+	*/
 
 	FILE* file = fopen(filename,"r");
 
@@ -844,7 +847,6 @@ void viewProcessInfo()
 			printf("\n\n");
 			CLEAR_SCREEN
 			printProcessInfo(aux->proc);
-			//printf("Current instruction: %s (%d)\n",aux->proc->code[aux->next_instruction]->call,aux->next_instruction);
 			printf("Current instruction:\n");
 			for(int i = 0; i < aux->proc->nCommands; i++)
 			{
