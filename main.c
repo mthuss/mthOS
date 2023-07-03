@@ -448,6 +448,7 @@ void advanceIOqueue()
 	{
 		aux->remaining_time--;
 		aux->process->remaining_time--;
+		aux->process->proc->code[aux->process->next_instruction]->arg--;
 		if(aux->remaining_time <= 0) //IO operation finished
 		{
 			aux->process->status = 'r';
@@ -843,8 +844,21 @@ void viewProcessInfo()
 			printf("\n\n");
 			CLEAR_SCREEN
 			printProcessInfo(aux->proc);
-			printf("Current instruction: %s (%d)\n",aux->proc->code[aux->next_instruction]->call,aux->next_instruction);
-			printf("Status: %s\n", getStatus(aux->status));
+			//printf("Current instruction: %s (%d)\n",aux->proc->code[aux->next_instruction]->call,aux->next_instruction);
+			printf("Current instruction:\n");
+			for(int i = 0; i < aux->proc->nCommands; i++)
+			{
+				if(i == aux->next_instruction)
+				{
+					if(aux->proc->code[i]->arg != -1)
+						printf("> %s %d\n",aux->proc->code[i]->call,aux->proc->code[i]->arg);
+					else
+						printf("> %s\n",aux->proc->code[i]->call);
+				}
+				else
+					printf("  %s\n",aux->proc->code[i]->call,aux->proc->code[i]->arg);
+			}
+			printf("\nStatus: %s\n", getStatus(aux->status));
 			printf("Remaining time: %ld\n",aux->remaining_time);
 			found = 1;
 			break;
@@ -1024,7 +1038,7 @@ void* mainLoop()
 		sem_wait(&sem);
 		advanceIOqueue();
 		sem_post(&sem);
-		usleep(300); //arbitrarily chosen time period to advance each unit of time
+		usleep(500); //arbitrarily chosen time period to advance each unit of time
 	}
 		
 }
