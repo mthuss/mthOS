@@ -262,8 +262,8 @@ void semaphoreP(semaphore_t* semaph, BCPitem_t* proc)
 		sem_queue(&semaph->waiting_list,proc);
 		proc_sleep(proc);
 	}
-		pthread_mutex_unlock(&semaph->mutex_lock);
 	semaph->v--;
+	pthread_mutex_unlock(&semaph->mutex_lock);
 }
 
 //releases the lock and wakes up the first waiting process

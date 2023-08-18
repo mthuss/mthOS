@@ -1,7 +1,13 @@
-# rothOS
- The **ro**drigo and m**th**us **O**perating **S**ystem:
+# mthOS
 
 An Operating System simulator written in C
+
+#### Functions simulated:
+- Process scheduling
+- Interrupts
+- Semaphores
+- Memory management / paging
+- I/O requests 
 
 <br>
 
